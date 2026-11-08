@@ -223,6 +223,8 @@ pub use tooltip_unit::{
     CorpsePlateQuery, ObjectPlate, ObjectPlateQuery, OwnerTitle, OwnerTitleKind, PartyRecord,
     TooltipTint, UnitTooltipFacts,
 };
+/// SuperWoW 2.2's Lua surface, which addons detect through `SUPERWOW_VERSION`.
+pub mod superwow;
 mod trade;
 mod tradeskill;
 mod trainer;
@@ -515,12 +517,12 @@ pub use unit::by_name::{
     self, HeldCandidatesQuery, LiveCandidate, LiveCandidates, NameCandidate, SeatedSelection,
 };
 pub use unit::{
-    grey_band, level_reads_unknown, parse_unit_token, power_token, resolve_unit_in, unit_is_grey,
-    ObjectNameQuery, PlayerNameQuery, PlayerRecord, RelationAnswer, RelationQuery,
-    SelectionGlobals, SelectionQuery, SelectionRequest, UnitBase, UnitGuids, UnitHeld,
-    UnitHeldQuery, UnitIdentityRead, UnitObject, UnitObjectRead, UnitRecord, UnitRecordQuery,
-    UnitRelations, UnitState, UnitStateAnswer, UnitStateQuery, UnitTokenGlobals, UnitTokenObjects,
-    UnitTokenParse,
+    grey_band, guid_string, level_reads_unknown, parse_unit_token, power_token, resolve_unit_in,
+    unit_is_grey, Hops, ObjectNameQuery, PlayerNameQuery, PlayerRecord, RelationAnswer,
+    RelationQuery, SelectionGlobals, SelectionQuery, SelectionRequest, UnitBase, UnitGuids,
+    UnitHeld, UnitHeldQuery, UnitIdentityRead, UnitObject, UnitObjectRead, UnitRecord,
+    UnitRecordQuery, UnitRelations, UnitState, UnitStateAnswer, UnitStateQuery, UnitTokenGlobals,
+    UnitTokenObjects, UnitTokenParse,
 };
 pub use unit_watch::{
     HealthWatch, TokenChange, TokenFlagsCarry, TOKEN_PARTY, TOKEN_PARTY_PET, TOKEN_PET,
@@ -851,6 +853,8 @@ fn install_in_game(lua: &Lua) -> mlua::Result<()> {
     worldmap::install(lua)?;
     worldstate::install(lua)?;
     net_stats::install(lua)?;
+    // Last: SuperWoW's extensions wrap the stock functions installed above.
+    superwow::install(lua)?;
     Ok(())
 }
 

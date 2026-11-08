@@ -1235,6 +1235,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             } => {
                 crate::ui_spellbook::cast_spell(&mut appliers.cast(), spell_id, on_self);
             }
+            ScriptCall::CastSpellAt { spell_id, guid, .. } => {
+                crate::ui_spellbook::cast_spell_at(&mut appliers.cast(), spell_id, guid);
+            }
             ScriptCall::CastShapeshiftForm { spell_id, .. } => {
                 crate::ui_shapeshift::cast_form(&mut appliers.cast(), spell_id);
             }

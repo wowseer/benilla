@@ -63,8 +63,12 @@ pub fn glue_events() -> &'static [&'static str] {
 
 /// The in-game table's distinct names, in id order.
 pub(crate) fn in_game_events() -> &'static [&'static str] {
-    static NAMES: std::sync::LazyLock<Vec<&'static str>> =
-        std::sync::LazyLock::new(|| event_names(IN_GAME_EVENT_TABLE));
+    static NAMES: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+        let mut names = event_names(IN_GAME_EVENT_TABLE);
+        // SuperWoW's hook on the table's build (`FrameScript_CreateEvents`) appends its own.
+        names.extend_from_slice(super::superwow::EVENTS);
+        names
+    });
     &NAMES
 }
 

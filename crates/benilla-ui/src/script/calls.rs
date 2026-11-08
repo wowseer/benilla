@@ -84,6 +84,14 @@ pub enum ScriptCall {
         /// `0x4b3466`, a form `0x4b35da`) come before it, so a refusal stops only the cast.
         may_cast: bool,
     },
+    /// SuperWoW's `CastSpellByName(name, "unit")` on a player-book name: the cast at the unit's
+    /// guid, in the selection's place, as `0x6e5a90` casts at an explicit guid.
+    CastSpellAt {
+        spell_id: u32,
+        guid: u64,
+        /// The gate's tag 2 allowed the cast (`0x6e4bc1`).
+        may_cast: bool,
+    },
     /// `CastSpell(id, "pet", onSelf)` and `CastSpellByName(name, onSelf)` on a name only the pet's
     /// book holds (`0x4b3b51`): `0x4b3300`'s `CMSG_PET_ACTION` fork (`0x4b34ce`), with the same
     /// guid swap.
@@ -519,7 +527,9 @@ impl ScriptCall {
             ScriptCall::EnchantConfirm(answer) => answer.may_cast,
             ScriptCall::Item(super::ItemCall::BindOnUse { may_cast }) => *may_cast,
             ScriptCall::Death(super::DeathAction::UseSoulstone { may_cast }) => *may_cast,
-            ScriptCall::CastSpell { may_cast, .. } => *may_cast,
+            ScriptCall::CastSpell { may_cast, .. } | ScriptCall::CastSpellAt { may_cast, .. } => {
+                *may_cast
+            }
             ScriptCall::CastShapeshiftForm { may_cast, .. } => *may_cast,
             ScriptCall::Select { may_cast, .. }
             | ScriptCall::TargetByName { may_cast, .. }

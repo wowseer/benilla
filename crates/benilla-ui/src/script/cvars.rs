@@ -213,30 +213,7 @@ impl super::UiScript {
     pub fn register_cvars<'a>(&self, vars: impl IntoIterator<Item = (&'a str, &'a str)>) {
         let mut model = self.model_mut();
         for (name, default) in vars {
-            let key = name.to_ascii_lowercase();
-            match model.cvars.get_mut(&key) {
-                Some(slot) => slot.default = default.to_string(),
-                None => {
-                    // A saved value is also the reset text, as the config line's `set` made the
-                    // record with it (`0x63d582`).
-                    let saved = model.cvars_saved_base.get(&key).cloned();
-                    let seq = model.cvars.len();
-                    model.cvars.insert(
-                        key,
-                        CvarSlot {
-                            name: name.to_string(),
-                            value: saved.clone().unwrap_or_else(|| default.to_string()),
-                            default: default.to_string(),
-                            latched: false,
-                            pending: None,
-                            check: None,
-                            reset: saved,
-                            session: false,
-                            seq,
-                        },
-                    );
-                }
-            }
+            register_in(&mut model, name, default);
         }
     }
 
@@ -445,6 +422,36 @@ pub(super) fn set_from_engine(model: &mut Model, name: &str, value: String) {
 /// applied value unstages it. Otherwise it is `InternalSet` (`0x63e0b0`): nothing for a read-only
 /// row (`0x63e0ba`-`0x63e0c2`), nothing for text equal to the value case-blind (`SStrCmpI`,
 /// `0x63e0ec`), and any other text stored as it is, a number or not.
+/// Register `name` with `default` in the VM's table, idempotently: a re-register refreshes the
+/// default and keeps a live value, and a new row starts at its saved value if the config file has
+/// one ([`super::UiScript::register_cvars`]'s row, and SuperWoW's own CVars).
+pub(crate) fn register_in(model: &mut Model, name: &str, default: &str) {
+    let key = name.to_ascii_lowercase();
+    match model.cvars.get_mut(&key) {
+        Some(slot) => slot.default = default.to_string(),
+        None => {
+            // A saved value is also the reset text, as the config line's `set` made the record
+            // with it (`0x63d582`).
+            let saved = model.cvars_saved_base.get(&key).cloned();
+            let seq = model.cvars.len();
+            model.cvars.insert(
+                key,
+                CvarSlot {
+                    name: name.to_string(),
+                    value: saved.clone().unwrap_or_else(|| default.to_string()),
+                    default: default.to_string(),
+                    latched: false,
+                    pending: None,
+                    check: None,
+                    reset: saved,
+                    session: false,
+                    seq,
+                },
+            );
+        }
+    }
+}
+
 fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
     store_with(model, key, value, false)
 }

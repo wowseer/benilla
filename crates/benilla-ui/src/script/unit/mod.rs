@@ -570,7 +570,7 @@ impl super::UiScript {
     }
 }
 
-use resolve::token_recognised;
+pub(crate) use resolve::token_recognised;
 
 /// The resolver's token check: an unrecognised token raises `Unknown unit name`, as `0x515970`
 /// ends in `luaL_error`; `""`, an absent token and a recognised one naming nothing pass. Whether
@@ -642,7 +642,7 @@ fn view_as<'m>(lua: &Lua, model: &'m Model, token: &str, thin: bool) -> Option<C
         (snapshot, Some(guid)) => {
             let query = UnitStateQuery {
                 guid,
-                player: base == UnitBase::Player && hops == 0,
+                player: base == UnitBase::Player && hops.is_empty(),
             };
             if thin {
                 if let Some(UnitHeld::Held {
@@ -861,8 +861,8 @@ pub use record::{PlayerNameQuery, UnitRecord, UnitRecordQuery};
 pub(crate) use relations::with_relations;
 pub use relations::{RelationAnswer, RelationQuery, UnitRelations};
 pub use resolve::{
-    bound_tokens_in, field_watchers_in, parse_unit_token, resolve_unit_in, tokens_in, UnitBase,
-    UnitGuids, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
+    bound_tokens_in, field_watchers_in, guid_string, parse_unit_token, resolve_unit_in, tokens_in,
+    Hops, UnitBase, UnitGuids, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
 };
 pub(crate) use resolve::{token_flags_in, token_guid, with_live_objects, LiveGlobals};
 pub use selection_read::{ObjectNameQuery, SelectionGlobals, SelectionQuery};

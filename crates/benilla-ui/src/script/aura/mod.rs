@@ -143,6 +143,8 @@ fn returns(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<Mul
             None => Value::Nil,
         });
     }
+    // SuperWoW: the aura's spell id last, `UnitBuff`'s third return and `UnitDebuff`'s fourth.
+    out.push(Value::Integer(i64::from(a.spell_id)));
     Ok(MultiValue::from_vec(out))
 }
 
@@ -474,26 +476,26 @@ mod tests {
         debuff.debuff_type = Some("Magic".into());
         s.set_unit_auras(TARGET, Some(vec![buff, debuff].into()));
 
-        let (icon, count, third) = s
-            .eval::<(String, i64, Option<String>)>(
-                r#"local a, b, c = UnitBuff("target", 1) return a, b, c"#,
+        // SuperWoW: the aura's spell id after 1.12's values.
+        let (icon, count, id, fourth) = s
+            .eval::<(String, i64, i64, Option<String>)>(
+                r#"local a, b, c, d = UnitBuff("target", 1) return a, b, c, d"#,
             )
             .unwrap();
         assert_eq!(icon, "Interface\\Icons\\Spell_1126");
         assert_eq!(count, 1);
-        assert_eq!(third, None, "UnitBuff returns two values, never a third");
+        assert_eq!(id, 1126, "UnitBuff's third value is the aura id");
+        assert_eq!(fourth, None, "and there is no fourth");
 
-        let (icon, count, dispel, fourth) = s
-            .eval::<(String, i64, String, Option<String>)>(
-                r#"local a, b, c, d = UnitDebuff("target", 1) return a, b, c, d"#,
+        let (icon, count, dispel, id, fifth) = s
+            .eval::<(String, i64, String, i64, Option<String>)>(
+                r#"local a, b, c, d, e = UnitDebuff("target", 1) return a, b, c, d, e"#,
             )
             .unwrap();
         assert_eq!(icon, "Interface\\Icons\\Spell_589");
         assert_eq!((count, dispel.as_str()), (3, "Magic"));
-        assert_eq!(
-            fourth, None,
-            "UnitDebuff returns three values, never a fourth"
-        );
+        assert_eq!(id, 589, "UnitDebuff's fourth value is the aura id");
+        assert_eq!(fifth, None, "and there is no fifth");
 
         // Stock `TargetFrame.lua:287-297`'s read, verbatim.
         assert!(s

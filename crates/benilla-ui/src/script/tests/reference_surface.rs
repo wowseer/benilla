@@ -50,7 +50,12 @@ fn the_engine_adds_no_global_past_1_12() {
     let known = reference();
     let mut beyond: Vec<String> = engine_globals()
         .into_iter()
-        .filter(|n| !known.contains(n) && !BEYOND_1_12.contains(&n.as_str()))
+        // SuperWoW's surface is this fork's one listed superset (`crate::script::superwow`).
+        .filter(|n| {
+            !known.contains(n)
+                && !BEYOND_1_12.contains(&n.as_str())
+                && !crate::script::superwow::GLOBALS.contains(&n.as_str())
+        })
         .collect();
     beyond.sort_unstable();
     assert!(
@@ -71,6 +76,7 @@ fn the_exception_list_is_exact() {
     let ours = engine_globals();
     let wrong: Vec<&str> = BEYOND_1_12
         .iter()
+        .chain(crate::script::superwow::GLOBALS)
         .copied()
         .filter(|n| known.contains(*n) || !ours.contains(*n))
         .collect();

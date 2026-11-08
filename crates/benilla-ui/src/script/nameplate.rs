@@ -251,6 +251,20 @@ impl NamePlates {
         self.by_frame.keys().copied()
     }
 
+    /// SuperWoW's `plate:GetName(1)`: the GUID of the unit `frame`'s plate shows, `None` for a
+    /// frame that is no plate or a plate shown for nobody.
+    pub(crate) fn guid_of_frame(&self, frame: FrameHandle) -> Option<u64> {
+        let &slot = self.by_frame.get(&frame)?;
+        self.plates.get(slot)?.key().filter(|&g| g != 0)
+    }
+
+    /// SuperWoW's `UnitNameplate(unit)`: the plate frame shown for `guid`, `None` without one.
+    pub(crate) fn frame_of_guid(&self, guid: u64) -> Option<FrameHandle> {
+        let &slot = self.assigned.get(&guid)?;
+        let plate = self.plates.get(slot)?;
+        (plate.key() == Some(guid)).then_some(plate.frame)
+    }
+
     /// Whether the `0x7cba30` veto refuses `frame`: only a plate, only while the veto stands.
     pub(crate) fn vetoes(&self, frame: FrameHandle) -> bool {
         self.hit_test_vetoed && self.by_frame.contains_key(&frame)

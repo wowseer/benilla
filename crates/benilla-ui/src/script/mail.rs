@@ -575,6 +575,56 @@ fn row_at(model: &Model, index: usize) -> Option<MailInboxRow> {
         .cloned()
 }
 
+/// SuperWoW's two mail links: `GetInboxItemLink(index)`, the hyperlink of the item a letter
+/// carries, and `GetSendMailItemLink()`, the one in the send slot; nil for none, or for an item
+/// whose record is not cached yet.
+pub(super) fn install_superwow(lua: &Lua) -> mlua::Result<()> {
+    let g = lua.globals();
+    g.set(
+        "GetInboxItemLink",
+        lua.create_function(|lua, index: Value| {
+            let index =
+                binding_abi::index_arg(lua, index, "Usage: GetInboxItemLink(messageIndex)")?;
+            let row = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                row_now(lua, &model, index)
+            };
+            let Some(r) = row.filter(|r| r.item_id != 0) else {
+                return Ok(None);
+            };
+            let key = ItemKey::Record {
+                entry: r.item_id,
+                roll: super::ItemRoll {
+                    property: r.item_random_property_id,
+                    ..Default::default()
+                },
+            };
+            Ok(read_live(lua, Some(key), |item| item.link()).flatten())
+        })?,
+    )?;
+    g.set(
+        "GetSendMailItemLink",
+        lua.create_function(|lua, ()| {
+            let held = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .mail_send_item
+                    .as_ref()
+                    .map(|it| (it.guid, it.link.clone()))
+            };
+            let Some((guid, snapshot)) = held else {
+                return Ok(None);
+            };
+            Ok(
+                read_live(lua, Some(ItemKey::Object(guid)), |item| item.link())
+                    .flatten()
+                    .or(snapshot),
+            )
+        })?,
+    )?;
+    Ok(())
+}
+
 /// Register the mail globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();

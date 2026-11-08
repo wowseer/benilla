@@ -161,6 +161,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // SuperWoW's GetPlayerBuffID(buffIndex): the aura's spell id, nil for an absent position.
+    g.set(
+        "GetPlayerBuffID",
+        lua.create_function(|lua, index: Value| {
+            let pos = buff_index_arg(lua, index, "Usage: GetPlayerBuffID(buffIndex)")?;
+            Ok(player_buff_record(lua, pos).map(|a| i64::from(a.spell_id)))
+        })?,
+    )?;
+
     // GetPlayerBuffDispelType(buffIndex) (`0x4e4800`): the `SpellDispelType.dbc` name of the
     // spell's `Dispel`, or nil for dispel 0 or a missing row (`0x4e485e`); never `""`, which Lua
     // takes as true. Stock `BuffFrame.lua:83` passes it `GetPlayerBuff`'s result unguarded, -1 too.

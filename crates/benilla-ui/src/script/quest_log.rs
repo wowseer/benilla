@@ -1404,6 +1404,66 @@ fn abandon_items(lua: &Lua, model: &Model) -> Vec<String> {
 }
 
 /// Register the quest-log globals.
+/// SuperWoW's quest hyperlink, `|cffffff00|Hquest:<id>:<level>|h[<title>]|h|r` (its format
+/// string, verbatim).
+fn quest_link(quest_id: u32, record: &QuestRecordView) -> String {
+    format!(
+        "|cffffff00|Hquest:{quest_id}:{}|h[{}]|h|r",
+        record.level, record.title
+    )
+}
+
+/// SuperWoW's quest log trio: `GetQuestIDForLogIndex(questIndex)`, the quest id of a log row;
+/// `GetQuestLinkForLogIndex(questIndex)`, its hyperlink; and `GetQuestLinkForID(questID)`, the
+/// hyperlink of a quest the client's cache holds. A header row, an empty slot or an uncached
+/// quest answers nil.
+pub(super) fn install_superwow(lua: &Lua) -> mlua::Result<()> {
+    let g = lua.globals();
+    fn row_quest(lua: &Lua, index: Value, usage: &'static str) -> mlua::Result<Option<u32>> {
+        let n = number_arg(lua, index, usage)?;
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        Ok(usize::try_from(n)
+            .ok()
+            .and_then(|n| model.quest_row(n))
+            .filter(|row| !row.is_header && row.quest_id != 0)
+            .map(|row| row.quest_id))
+    }
+    g.set(
+        "GetQuestIDForLogIndex",
+        lua.create_function(|lua, index: Value| {
+            row_quest(lua, index, "Usage: GetQuestIDForLogIndex(questIndex)")
+        })?,
+    )?;
+    g.set(
+        "GetQuestLinkForLogIndex",
+        lua.create_function(|lua, index: Value| {
+            let Some(id) = row_quest(lua, index, "Usage: GetQuestLinkForLogIndex(questIndex)")?
+            else {
+                return Ok(None);
+            };
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            Ok(model
+                .quest_store
+                .records
+                .get(&id)
+                .map(|r| quest_link(id, r)))
+        })?,
+    )?;
+    g.set(
+        "GetQuestLinkForID",
+        lua.create_function(|lua, id: Value| {
+            let id = binding_abi::index_arg32(lua, id, "Usage: GetQuestLinkForID(questID)")?;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            Ok(model
+                .quest_store
+                .records
+                .get(&id)
+                .map(|r| quest_link(id, r)))
+        })?,
+    )?;
+    Ok(())
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 

@@ -1323,7 +1323,13 @@ impl Model {
     /// a hop is the app's to push, base by base, and reads nothing here.
     fn chained_unit(&self, token: &str) -> Option<&UnitState> {
         match parse_unit_token(token) {
-            UnitTokenParse::Unit { base, hops } if hops > 0 || base == UnitBase::Target => {
+            UnitTokenParse::Unit { base, hops }
+                if !hops.is_empty()
+                    || matches!(
+                        base,
+                        UnitBase::Target | UnitBase::Guid(_) | UnitBase::Mark(_)
+                    ) =>
+            {
                 let guid = self.unit_guids.resolve_unit(base, hops)?;
                 self.units_by_guid.get(&guid)
             }

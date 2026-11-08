@@ -770,7 +770,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let name = lua
                 .coerce_string(name)?
                 .ok_or_else(|| mlua::Error::runtime(USAGE_CAST_SPELL_BY_NAME))?;
-            let on_self = bool_or_default(on_self.as_ref(), false);
+            // SuperWoW: a second argument that is a unit token is the cast's target, in the
+            // selection's place; any other value is 1.12's `onSelf` flag, so `"1"` and `"yes"`
+            // still read as they did.
+            let unit = match &on_self {
+                Some(Value::String(s)) => {
+                    let token = s.to_str()?.to_string();
+                    if super::unit::token_recognised(&token) {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        Some(super::unit::guid_of(lua, &model, &token)?)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            let me = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.unit_guids.player
+            };
+            let on_self = match unit {
+                Some(Some(guid)) => guid != 0 && guid == me,
+                Some(None) => false,
+                None => bool_or_default(on_self.as_ref(), false),
+            };
+            let at = unit.flatten().filter(|_| !on_self);
             let found = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 by_name::resolve_named(
@@ -796,10 +820,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 },
                 // `TryCastSpell`'s gate, tag 2 (`0x6e4bc1`), behind the cancels as for
                 // `CastSpell`.
-                Some(found) if !found.passive => ScriptCall::CastSpell {
-                    spell_id: found.spell_id,
-                    on_self,
-                    may_cast: protected::gate(lua, Tag::CAST),
+                Some(found) if !found.passive => match at {
+                    Some(guid) => ScriptCall::CastSpellAt {
+                        spell_id: found.spell_id,
+                        guid,
+                        may_cast: protected::gate(lua, Tag::CAST),
+                    },
+                    None => ScriptCall::CastSpell {
+                        spell_id: found.spell_id,
+                        on_self,
+                        may_cast: protected::gate(lua, Tag::CAST),
+                    },
                 },
                 _ => return Ok(()),
             };

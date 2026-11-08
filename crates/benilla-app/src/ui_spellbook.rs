@@ -454,6 +454,22 @@ pub(crate) fn sort_book<T>(items: &mut Vec<T>, key: impl Fn(&T) -> BookKey) {
 /// through the cast tail the action bar uses, at the selection as the calls before it left it, or
 /// with `onSelf` at the caster.
 pub(crate) fn cast_spell(cast: &mut crate::spell::ScriptCast, spell_id: u32, on_self: bool) {
+    cast_spell_on(cast, spell_id, on_self, None);
+}
+
+/// SuperWoW's `CastSpellByName(name, unit)`: [`cast_spell`] with the unit's guid in the
+/// selection's place, as an explicit-guid cast (`0x6e5a90`) binds it.
+pub(crate) fn cast_spell_at(cast: &mut crate::spell::ScriptCast, spell_id: u32, guid: u64) {
+    cast_spell_on(cast, spell_id, false, Some(guid));
+}
+
+/// [`cast_spell`]'s body, at `at` when a guid is named, else at the selection or, `on_self`, us.
+fn cast_spell_on(
+    cast: &mut crate::spell::ScriptCast,
+    spell_id: u32,
+    on_self: bool,
+    at: Option<u64>,
+) {
     let crate::spell::ScriptCast { targeting, ladder } = cast;
     // `CastSpell`'s three forks ahead of the cast (`0x4b3300`), in order, all ahead of the gate:
     // the active-action toggle (`0x4b36f0`), the stop of the targeting cursor this spell armed
@@ -502,10 +518,14 @@ pub(crate) fn cast_spell(cast: &mut crate::spell::ScriptCast, spell_id: u32, on_
     }
     debug!(
         "ui_spellbook: cast {spell_id} (target {:?}{})",
-        targeting.selection.guid,
+        at.or(targeting.selection.guid),
         if on_self { ", on self" } else { "" }
     );
-    ladder.send_spell(spell_id, &targeting.context().self_bound(on_self), on_self);
+    let context = match at {
+        Some(guid) => targeting.context_at_guid(guid),
+        None => targeting.context().self_bound(on_self),
+    };
+    ladder.send_spell(spell_id, &context, on_self);
 }
 
 #[cfg(test)]

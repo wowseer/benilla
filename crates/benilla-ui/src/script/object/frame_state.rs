@@ -55,17 +55,35 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     // Identity / hierarchy
-    set_shared(lua, m, Side::Frame, "GetName", |lua, this: Table| {
-        let h = frame_handle_of(lua, &this)?;
-        let name = {
-            let model = lua.app_data_ref::<Model>().expect("model");
-            model.arena.frame(h).and_then(|f| f.name.clone())
-        };
-        match name {
-            Some(n) => Ok(Value::String(lua.create_string(&n)?)),
-            None => Ok(Value::Nil),
-        }
-    })?;
+    set_shared(
+        lua,
+        m,
+        Side::Frame,
+        "GetName",
+        |lua, (this, guid): (Table, Option<Value>)| {
+            let h = frame_handle_of(lua, &this)?;
+            // SuperWoW: `GetName(1)` on a nameplate answers the GUID of the unit it shows.
+            if guid.is_some_and(|v| !matches!(v, Value::Nil | Value::Boolean(false))) {
+                let plate = {
+                    let model = lua.app_data_ref::<Model>().expect("model");
+                    model.nameplates.guid_of_frame(h)
+                };
+                if let Some(g) = plate {
+                    return Ok(Value::String(
+                        lua.create_string(crate::script::guid_string(g))?,
+                    ));
+                }
+            }
+            let name = {
+                let model = lua.app_data_ref::<Model>().expect("model");
+                model.arena.frame(h).and_then(|f| f.name.clone())
+            };
+            match name {
+                Some(n) => Ok(Value::String(lua.create_string(&n)?)),
+                None => Ok(Value::Nil),
+            }
+        },
+    )?;
     // GetID/SetID (`0x775280`/`0x775340`): a plain numeric label at `+0xb0` (XML `id=`), default 0.
     // SetID tests `lua_isnumber` (`0x7753cc`), `_ftol`s the number, and a miss raises
     // `Usage: %s:SetID(ID)` (`0x87976c`, `0x77540b`).

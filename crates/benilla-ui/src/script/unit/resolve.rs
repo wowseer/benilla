@@ -11,6 +11,12 @@
 //! the mouseover's, and each hop's `UNIT_FIELD_TARGET`, which a getter reads through the lent host
 //! as of the place it runs ([`resolve_token`]). With no host to ask, both come off the VM's
 //! stand-in ([`UnitGuids`]).
+//!
+//! SuperWoW (2.2) extends the grammar, and benilla takes the extension: a base can also be a
+//! unit's GUID string (`0x` and up to 16 hex digits, [`UnitBase::Guid`]) or a raid mark
+//! (`mark1`-`mark8`, [`UnitBase::Mark`]), and a hop can be `owner` as well as `target`
+//! ([`Hops`]), so `"targetowner"` names a totem's shaman and `"0xF13000085D27A6BAtarget"` that
+//! mob's target.
 
 use std::collections::HashMap;
 
@@ -41,6 +47,12 @@ pub trait UnitTokenGlobals {
     /// `raidpetN`'s guid while its member's object is not held: the roster record's (`0x4919ae`),
     /// client state the stats packet writes.
     fn raid_pet_record(&self, row: u32) -> u64;
+    /// SuperWoW's `markN`: the unit holding raid mark slot `slot` (N-1) on the 8-slot board, 0
+    /// for none. A reader that does not hold the board answers nobody.
+    fn raid_mark(&self, slot: u32) -> u64 {
+        let _ = slot;
+        0
+    }
 }
 
 /// What `0x515970` reads off the objects the engine holds, each read on its own: through the lent
@@ -60,6 +72,62 @@ pub trait UnitTokenObjects {
     /// `None` while no unit is held there (the hop's lookup `0x515a0f` and the mouseover's
     /// `0x515bd2`, typemask 8).
     fn target_of(&self, guid: u64) -> Option<u64>;
+    /// SuperWoW's `owner` hop off the unit held under `guid`: its charmer, else its summoner, else
+    /// its creator (a totem's shaman), 0 for none; `None` while no unit is held there. A reader
+    /// that does not read owners answers `None`, so the hop names nobody.
+    fn owner_of(&self, guid: u64) -> Option<u64> {
+        let _ = guid;
+        None
+    }
+}
+
+/// The hops after a token's base, in order: each a `target` hop, or SuperWoW's `owner` hop. The
+/// first 128 hops can be `owner` hops; a token with a later one parses to nobody.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hops {
+    len: usize,
+    /// Bit `i` set: hop `i` is an `owner` hop.
+    owner: u128,
+}
+
+impl Hops {
+    /// No hop: the base itself.
+    pub const NONE: Hops = Hops { len: 0, owner: 0 };
+
+    /// `n` `target` hops, the only hop 1.12 knows.
+    pub fn targets(n: usize) -> Self {
+        Hops { len: n, owner: 0 }
+    }
+
+    /// How many hops the token takes.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// The base itself, no hop.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Append a `target` hop.
+    fn push_target(&mut self) {
+        self.len += 1;
+    }
+
+    /// Append an `owner` hop; `false` past the 128 the mask holds.
+    fn push_owner(&mut self) -> bool {
+        if self.len >= 128 {
+            return false;
+        }
+        self.owner |= 1u128 << self.len;
+        self.len += 1;
+        true
+    }
+
+    /// Whether hop `i` is an `owner` hop.
+    fn is_owner(&self, i: usize) -> bool {
+        i < 128 && self.owner & (1u128 << i) != 0
+    }
 }
 
 /// The guid a parsed token names, `None` for nobody: its base off `globals` and `objects`, then
@@ -69,7 +137,7 @@ pub fn resolve_unit_in(
     globals: &dyn UnitTokenGlobals,
     objects: &dyn UnitTokenObjects,
     base: UnitBase,
-    hops: usize,
+    hops: Hops,
 ) -> Option<u64> {
     // A member's pet: off its descriptor while held, else its record (an empty row's guid 0 is
     // never held, `0x46487b`).
@@ -95,18 +163,28 @@ pub fn resolve_unit_in(
             objects.target_of(guid)?;
             guid
         }
+        // SuperWoW: the GUID itself, held or not; the getters read what they hold of it.
+        UnitBase::Guid(guid) => guid,
+        // SuperWoW: the board's slot, nobody past the eight.
+        UnitBase::Mark(slot) if slot < 8 => globals.raid_mark(slot),
+        UnitBase::Mark(_) => 0,
     };
     follow(objects, guid, hops)
 }
 
 /// The `target` loop (`0x5159d3`-`0x515a2c`): nobody stays nobody, and each hop goes to the held
-/// unit's `UNIT_FIELD_TARGET`; a hop off a unit not held is a quiet nobody (`0x515a16`).
-fn follow(objects: &dyn UnitTokenObjects, mut guid: u64, hops: usize) -> Option<u64> {
-    for _ in 0..hops {
+/// unit's `UNIT_FIELD_TARGET`; a hop off a unit not held is a quiet nobody (`0x515a16`). A
+/// SuperWoW `owner` hop goes to the held unit's owner the same way.
+fn follow(objects: &dyn UnitTokenObjects, mut guid: u64, hops: Hops) -> Option<u64> {
+    for i in 0..hops.len() {
         if guid == 0 {
             return None;
         }
-        guid = objects.target_of(guid)?;
+        guid = if hops.is_owner(i) {
+            objects.owner_of(guid)?
+        } else {
+            objects.target_of(guid)?
+        };
     }
     Some(guid).filter(|&g| g != 0)
 }
@@ -133,7 +211,7 @@ pub fn bound_tokens_in(
 ) -> Vec<String> {
     let mut out = Vec::new();
     let mut name = |token: String, base: UnitBase| {
-        if resolve_unit_in(globals, objects, base, 0).is_some() {
+        if resolve_unit_in(globals, objects, base, Hops::NONE).is_some() {
             out.push(token);
         }
     };
@@ -317,9 +395,10 @@ pub(crate) fn with_live_objects<T>(
 }
 
 /// Whether resolving `base` with `hops` reads any object, so asks the host: a hop, or a base the
-/// objects answer. `target`, `npc`, `partyN` and `raidN` read the client's globals alone.
-fn reads_objects(base: UnitBase, hops: usize) -> bool {
-    hops > 0
+/// objects answer. `target`, `npc`, `partyN` and `raidN` read the client's globals alone, and
+/// SuperWoW's GUID and mark bases read none either.
+fn reads_objects(base: UnitBase, hops: Hops) -> bool {
+    !hops.is_empty()
         || matches!(
             base,
             UnitBase::Player
@@ -338,7 +417,7 @@ pub(crate) fn resolve_parsed(
     lua: &Lua,
     guids: &UnitGuids,
     base: UnitBase,
-    hops: usize,
+    hops: Hops,
 ) -> Option<u64> {
     live_parsed(lua, guids, base, hops).unwrap_or_else(|| guids.resolve_unit(base, hops))
 }
@@ -349,7 +428,7 @@ pub(crate) fn live_parsed(
     lua: &Lua,
     guids: &UnitGuids,
     base: UnitBase,
-    hops: usize,
+    hops: Hops,
 ) -> Option<Option<u64>> {
     // The group rows and the globals first: the host is not free to ask again inside the
     // objects' read.
@@ -359,12 +438,20 @@ pub(crate) fn live_parsed(
         }
         _ => None,
     };
+    // SuperWoW's mark board, asked only for a `markN` token.
+    let marks = match base {
+        UnitBase::Mark(_) => {
+            crate::script::live::ask(lua, &crate::script::superwow::RaidMarksQuery)
+        }
+        _ => None,
+    };
     let selection = live_selection(lua);
     let globals = LiveGlobals {
         guids,
         row,
         rows: None,
         selection,
+        marks,
     };
     if reads_objects(base, hops) {
         with_live_objects(lua, |objects| {
@@ -373,6 +460,12 @@ pub(crate) fn live_parsed(
     } else if matches!(base, UnitBase::Target | UnitBase::Npc) {
         // A hop-less `target` or `npc` is its global alone (`0x515a86`, `0x515c00`).
         selection.map(|_| resolve_unit_in(&globals, &NoObjects, base, hops))
+    } else if matches!(base, UnitBase::Guid(_)) {
+        // A hop-less GUID names itself, whatever the host holds.
+        Some(resolve_unit_in(&globals, &NoObjects, base, hops))
+    } else if matches!(base, UnitBase::Mark(_)) {
+        // A hop-less mark is the board's slot alone.
+        marks.map(|_| resolve_unit_in(&globals, &NoObjects, base, hops))
     } else {
         // A group row alone reads no object, and a hop-less `partyN` or `raidN` asks for none.
         row.map(|_| resolve_unit_in(&globals, &NoObjects, base, hops))
@@ -388,6 +481,8 @@ pub(crate) struct LiveGlobals<'a> {
     row: Option<(UnitBase, GroupRow)>,
     rows: Option<GroupRows>,
     selection: Option<SelectionGlobals>,
+    /// SuperWoW's mark board as the host answered it, `None` where none was asked.
+    marks: Option<[u64; 8]>,
 }
 
 impl<'a> LiveGlobals<'a> {
@@ -399,6 +494,7 @@ impl<'a> LiveGlobals<'a> {
             row: None,
             rows: crate::script::live::ask(lua, &GroupRowsQuery),
             selection: live_selection(lua),
+            marks: None,
         }
     }
 
@@ -461,6 +557,10 @@ impl UnitTokenGlobals for LiveGlobals<'_> {
                 .asked_row(true, row)
                 .map_or_else(|| self.guids.raid_pet_record(row), |r| r.pet_record),
         }
+    }
+    fn raid_mark(&self, slot: u32) -> u64 {
+        let slot = usize::try_from(slot).unwrap_or(usize::MAX);
+        self.marks.and_then(|m| m.get(slot).copied()).unwrap_or(0)
     }
 }
 
@@ -571,6 +671,11 @@ pub enum UnitBase {
     PartyPet(u32),
     Raid(u32),
     RaidPet(u32),
+    /// SuperWoW: the unit with this GUID, written `0x` and up to 16 hex digits.
+    Guid(u64),
+    /// SuperWoW: `markN`, the unit holding raid mark slot N-1; like `partyN`, a missing or zero
+    /// number is the reserved `u32::MAX`, nobody.
+    Mark(u32),
 }
 
 /// What `0x515970` makes of a token's text, before it reads any state.
@@ -579,11 +684,13 @@ pub enum UnitTokenParse {
     /// None of the nine compares match: the reference raises `Unknown unit name` (`0x515c14`).
     Unknown,
     /// Recognised, and names nobody whatever the state: the empty token (`0x51599d`), or text
-    /// after the base, and after each hop, that is not `target` (`0x515c2d`).
+    /// after the base, and after each hop, that is not `target` (`0x515c2d`) nor SuperWoW's
+    /// `owner`.
     Nobody,
-    /// A base and the `target` hops after it, each off the current unit's `UNIT_FIELD_TARGET`
-    /// (`0x515a1c`-`0x515a25`); the loop has no depth limit.
-    Unit { base: UnitBase, hops: usize },
+    /// A base and the hops after it, each off the current unit's `UNIT_FIELD_TARGET`
+    /// (`0x515a1c`-`0x515a25`) or, for SuperWoW's `owner`, off its owner; the loop has no depth
+    /// limit.
+    Unit { base: UnitBase, hops: Hops },
 }
 
 /// `_strnicmp(s, lit, strlen(lit)) == 0`: ASCII fold only, bytes of 0x80 and up exact.
@@ -602,7 +709,38 @@ fn base_of(token: &[u8]) -> Option<(Base, usize)> {
 /// Whether the resolver recognises the token, not whether it names a unit: `"party5"` solo is
 /// recognised and answers nil, and only a token none of its nine compares match raises.
 pub(crate) fn token_recognised(token: &str) -> bool {
-    token.eq_ignore_ascii_case("npc") || base_of(token.as_bytes()).is_some()
+    token.eq_ignore_ascii_case("npc")
+        || base_of(token.as_bytes()).is_some()
+        || superwow_base(token.as_bytes()).is_some()
+}
+
+/// SuperWoW's two bases, tested after the nine compares miss, with the bytes they take: a GUID
+/// string (`0x`, then 1 to 16 hex digits, either case) or `mark` and its number.
+fn superwow_base(token: &[u8]) -> Option<(UnitBase, usize)> {
+    if has_prefix(token, "0x") {
+        let digits = token[2..]
+            .iter()
+            .take(16)
+            .take_while(|b| b.is_ascii_hexdigit())
+            .count();
+        if digits == 0 {
+            return None;
+        }
+        let text = std::str::from_utf8(&token[2..2 + digits]).ok()?;
+        let guid = u64::from_str_radix(text, 16).ok()?;
+        return Some((UnitBase::Guid(guid), 2 + digits));
+    }
+    if has_prefix(token, "mark") {
+        let (slot, digits) = index_of(&token[4..]);
+        return Some((UnitBase::Mark(slot), 4 + digits));
+    }
+    None
+}
+
+/// A GUID as SuperWoW writes it, the text [`UnitBase::Guid`] reads back: `0x` and 16 uppercase
+/// hex digits, zero-padded (its formatter writes 16 nibbles off a `"0123456789ABCDEF"` table).
+pub fn guid_string(guid: u64) -> String {
+    format!("0x{guid:016X}")
 }
 
 /// The inline base-10 parse after `party`, `partypet`, `raid` and `raidpet`, then `dec` to a
@@ -625,39 +763,47 @@ pub fn parse_unit_token(token: &str) -> UnitTokenParse {
     if bytes.is_empty() {
         return UnitTokenParse::Nobody;
     }
-    let Some((base, len)) = base_of(bytes) else {
-        return if token.eq_ignore_ascii_case("npc") {
-            UnitTokenParse::Unit {
+    let (base, mut rest) = match base_of(bytes) {
+        Some((base, len)) => {
+            let mut rest = &bytes[len..];
+            let mut numbered = |make: fn(u32) -> UnitBase| {
+                let (row, digits) = index_of(rest);
+                rest = &rest[digits..];
+                make(row)
+            };
+            let base = match base {
+                Base::Player => UnitBase::Player,
+                Base::Pet => UnitBase::Pet,
+                Base::Target => UnitBase::Target,
+                Base::Mouseover => UnitBase::Mouseover,
+                Base::PartyPet => numbered(UnitBase::PartyPet),
+                Base::Party => numbered(UnitBase::Party),
+                Base::RaidPet => numbered(UnitBase::RaidPet),
+                Base::Raid => numbered(UnitBase::Raid),
+            };
+            (base, rest)
+        }
+        None if token.eq_ignore_ascii_case("npc") => {
+            return UnitTokenParse::Unit {
                 base: UnitBase::Npc,
-                hops: 0,
-            }
-        } else {
-            UnitTokenParse::Unknown
-        };
+                hops: Hops::NONE,
+            };
+        }
+        None => match superwow_base(bytes) {
+            Some((base, len)) => (base, &bytes[len..]),
+            None => return UnitTokenParse::Unknown,
+        },
     };
-    let mut rest = &bytes[len..];
-    let mut numbered = |make: fn(u32) -> UnitBase| {
-        let (row, digits) = index_of(rest);
-        rest = &rest[digits..];
-        make(row)
-    };
-    let base = match base {
-        Base::Player => UnitBase::Player,
-        Base::Pet => UnitBase::Pet,
-        Base::Target => UnitBase::Target,
-        Base::Mouseover => UnitBase::Mouseover,
-        Base::PartyPet => numbered(UnitBase::PartyPet),
-        Base::Party => numbered(UnitBase::Party),
-        Base::RaidPet => numbered(UnitBase::RaidPet),
-        Base::Raid => numbered(UnitBase::Raid),
-    };
-    let mut hops = 0;
+    let mut hops = Hops::NONE;
     while !rest.is_empty() {
-        if !has_prefix(rest, "target") {
+        if has_prefix(rest, "target") {
+            rest = &rest[6..];
+            hops.push_target();
+        } else if has_prefix(rest, "owner") && hops.push_owner() {
+            rest = &rest[5..];
+        } else {
             return UnitTokenParse::Nobody;
         }
-        rest = &rest[6..];
-        hops += 1;
     }
     UnitTokenParse::Unit { base, hops }
 }
@@ -682,7 +828,7 @@ impl UnitGuids {
 
     /// The guid a parsed token names off the snapshot alone ([`resolve_unit_in`] over it): its
     /// base's guid, then each `target` hop. `None` is nobody.
-    pub(crate) fn resolve_unit(&self, base: UnitBase, hops: usize) -> Option<u64> {
+    pub(crate) fn resolve_unit(&self, base: UnitBase, hops: Hops) -> Option<u64> {
         resolve_unit_in(self, self, base, hops)
     }
 
@@ -837,6 +983,130 @@ mod tests {
         fn target_of(&self, guid: u64) -> Option<u64> {
             self.targets.get(&guid).copied()
         }
+    }
+
+    /// SuperWoW's grammar: a GUID string or `markN` as the base, and `owner` among the hops.
+    #[test]
+    fn superwow_tokens_parse_to_guid_and_mark_bases_and_owner_hops() {
+        let unit = |base, hops| UnitTokenParse::Unit { base, hops };
+        let mut owner = Hops::NONE;
+        assert!(owner.push_owner());
+        let mut target_owner = Hops::NONE;
+        target_owner.push_target();
+        assert!(target_owner.push_owner());
+        assert_eq!(
+            parse_unit_token("0xF13000085D27A6BA"),
+            unit(UnitBase::Guid(0xF130_0008_5D27_A6BA), Hops::NONE)
+        );
+        assert_eq!(
+            parse_unit_token("0x000000000013a2b5target"),
+            unit(UnitBase::Guid(0x13_A2B5), Hops::targets(1))
+        );
+        assert_eq!(
+            parse_unit_token("0x10owner"),
+            unit(UnitBase::Guid(0x10), owner)
+        );
+        assert_eq!(
+            parse_unit_token("mark8"),
+            unit(UnitBase::Mark(7), Hops::NONE)
+        );
+        assert_eq!(
+            parse_unit_token("MARK1target"),
+            unit(UnitBase::Mark(0), Hops::targets(1))
+        );
+        assert_eq!(
+            parse_unit_token("mark0"),
+            unit(UnitBase::Mark(u32::MAX), Hops::NONE)
+        );
+        assert_eq!(
+            parse_unit_token("targetowner"),
+            unit(UnitBase::Target, owner)
+        );
+        assert_eq!(
+            parse_unit_token("pettargetowner"),
+            unit(UnitBase::Pet, target_owner)
+        );
+        assert_eq!(parse_unit_token("0x"), UnitTokenParse::Unknown);
+        assert_eq!(parse_unit_token("0xg"), UnitTokenParse::Unknown);
+        assert_eq!(parse_unit_token("targetown"), UnitTokenParse::Nobody);
+        assert!(token_recognised("0x0000000000000010"));
+        assert!(token_recognised("mark3"));
+        assert_eq!(guid_string(0x13_A2B5), "0x000000000013A2B5");
+        assert_eq!(
+            parse_unit_token(&guid_string(0xF130_0008_5D27_A6BA)),
+            unit(UnitBase::Guid(0xF130_0008_5D27_A6BA), Hops::NONE)
+        );
+    }
+
+    /// A GUID names itself, a mark the board's unit, and an `owner` hop goes to the owner.
+    #[test]
+    fn superwow_tokens_resolve_through_the_board_and_the_owners() {
+        struct Board(UnitGuids);
+        impl UnitTokenGlobals for Board {
+            fn target(&self) -> u64 {
+                self.0.target
+            }
+            fn mouseover(&self) -> u64 {
+                self.0.mouseover
+            }
+            fn npc(&self) -> u64 {
+                self.0.npc
+            }
+            fn party(&self, row: u32) -> u64 {
+                self.0.party(row)
+            }
+            fn raid(&self, row: u32) -> u64 {
+                self.0.raid(row)
+            }
+            fn party_pet_record(&self, row: u32) -> u64 {
+                self.0.party_pet_record(row)
+            }
+            fn raid_pet_record(&self, row: u32) -> u64 {
+                self.0.raid_pet_record(row)
+            }
+            fn raid_mark(&self, slot: u32) -> u64 {
+                if slot == 2 {
+                    MOB
+                } else {
+                    0
+                }
+            }
+        }
+        struct Owned(UnitGuids);
+        impl UnitTokenObjects for Owned {
+            fn active_player(&self) -> u64 {
+                self.0.player
+            }
+            fn pet_of(&self, guid: u64) -> Option<u64> {
+                self.0.pet_of(guid)
+            }
+            fn target_of(&self, guid: u64) -> Option<u64> {
+                self.0.target_of(guid)
+            }
+            fn owner_of(&self, guid: u64) -> Option<u64> {
+                (guid == PET).then_some(ME)
+            }
+        }
+        let g = Board(guids());
+        let o = Owned(guids());
+        let at = |token: &str| match parse_unit_token(token) {
+            UnitTokenParse::Unit { base, hops } => resolve_unit_in(&g, &o, base, hops),
+            _ => None,
+        };
+        assert_eq!(at(&guid_string(P1)), Some(P1));
+        assert_eq!(at(&format!("{}target", guid_string(P1))), Some(ME));
+        assert_eq!(at("mark3"), Some(MOB));
+        assert_eq!(at("mark3target"), Some(P1));
+        assert_eq!(at("mark1"), None);
+        assert_eq!(at("petowner"), Some(ME));
+        assert_eq!(
+            at("targetowner"),
+            None,
+            "the mob has no owner reader answer"
+        );
+        // The snapshot alone holds no board and reads no owner.
+        assert_eq!(guids().guid_of("mark3"), None);
+        assert_eq!(guids().guid_of("petowner"), None);
     }
 
     /// Each part of the resolver that reads an object reads it off the objects, not the snapshot:
@@ -1038,7 +1308,10 @@ mod tests {
     #[test]
     fn a_token_parses_to_a_base_and_its_hops() {
         use UnitBase::*;
-        let unit = |base, hops| UnitTokenParse::Unit { base, hops };
+        let unit = |base, n: usize| UnitTokenParse::Unit {
+            base,
+            hops: Hops::targets(n),
+        };
         for (token, want) in [
             ("player", unit(Player, 0)),
             ("pet", unit(Pet, 0)),
