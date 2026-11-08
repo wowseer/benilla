@@ -1,6 +1,6 @@
 //! A read-only MPQ reader for the 1.12.1 `Data/` chain: format V1/V2, every file stored whole or
-//! `COMPRESS`-flagged and sectored, no encrypted or single-unit files, no PTCH patches. Anything
-//! else is a hard error.
+//! `COMPRESS`-flagged and sectored, plain or encrypted, no single-unit files, no PTCH patches.
+//! Anything else is a hard error.
 //!
 //! The patch archives carry delete markers (flag `0x02000000`, size 0): the path is deleted from
 //! the composite chain. [`Archive::contains`] reports one present and [`Archive::read_file`]
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use benilla_bytes::{capped, ByteExt};
 
 mod crypto;
-use crypto::{decrypt_block, hash_string, hash_type};
+use crypto::{decrypt_block, decrypt_bytes, hash_string, hash_type};
 
 /// `MPQ\x1A` as a little-endian `u32`: the archive header signature.
 const SIGNATURE: u32 = 0x1A51_504D;
@@ -32,6 +32,8 @@ const USERDATA_SIGNATURE: u32 = 0x1B51_504D;
 const FLAG_CODEC_MASK: u32 = 0x0000_FF00;
 const FLAG_COMPRESS: u32 = 0x0000_0200;
 const FLAG_ENCRYPTED: u32 = 0x0001_0000;
+/// An encrypted file's key is adjusted by its position and size ([`file_key`]).
+const FLAG_FIX_KEY: u32 = 0x0002_0000;
 const FLAG_SINGLE_UNIT: u32 = 0x0100_0000;
 /// A patch archive's delete marker (size 0): the path is deleted from the composite chain.
 const FLAG_DELETE_MARKER: u32 = 0x0200_0000;
@@ -220,9 +222,6 @@ impl Archive {
             return Err(Error::NotFound(name.into()));
         }
         // Outside the 1.12.1 envelope: refuse rather than guess.
-        if block.flags & FLAG_ENCRYPTED != 0 {
-            return Err(Error::Unsupported(format!("encrypted file {name}")));
-        }
         if block.flags & FLAG_SINGLE_UNIT != 0 {
             return Err(Error::Unsupported(format!("single-unit file {name}")));
         }
@@ -237,6 +236,8 @@ impl Archive {
         let file_len = file.metadata()?.len();
         let avail = avail_from(file_len, file_pos);
 
+        let key = (block.flags & FLAG_ENCRYPTED != 0).then(|| file_key(name, &block));
+
         let mut open = ArchiveFile {
             file,
             name: name.to_owned(),
@@ -245,6 +246,7 @@ impl Archive {
             sector_size: idx.sector_size,
             offsets: None,
             codec_flags,
+            key,
             avail,
             pos: 0,
             sector: None,
@@ -255,6 +257,16 @@ impl Archive {
                 return Err(Error::Corrupt(format!(
                     "{name}: stored size ({file_size}) larger than the archive"
                 )));
+            }
+            // An encrypted stored file is still cut into sectors, each under its own key: read it
+            // through sector offsets at the sector size, where every sector is stored as it is.
+            if key.is_some() {
+                let sector_count = file_size.div_ceil(idx.sector_size);
+                open.offsets = Some(
+                    (0..=sector_count)
+                        .map(|i| (i * idx.sector_size).min(file_size) as u32)
+                        .collect(),
+                );
             }
             return Ok(open);
         }
@@ -274,6 +286,10 @@ impl Archive {
         open.file.seek(SeekFrom::Start(file_pos))?;
         let mut otab = vec![0u8; otab_cap * 4]; // == otab_len * 4, proven <= avail above
         open.file.read_exact(&mut otab)?;
+        // The table is under the file's key − 1 (`0x65158f`-`0x65159a`).
+        if let Some(key) = key {
+            decrypt_bytes(&mut otab, key.wrapping_sub(1));
+        }
         let offsets = otab
             .as_chunks::<4>()
             .0
@@ -302,6 +318,8 @@ pub struct ArchiveFile {
     offsets: Option<Vec<u32>>,
     /// The block flags' `0xff00` byte: only [`FLAG_COMPRESS`] runs a codec on a shrunken sector.
     codec_flags: u32,
+    /// An encrypted file's key ([`file_key`]): sector `i` is under the key + `i`.
+    key: Option<u32>,
     /// Bytes from `base` to the archive's end: the cap on every length read from a header.
     avail: usize,
     /// The read position in the uncompressed file.
@@ -362,6 +380,10 @@ impl ArchiveFile {
             .seek(SeekFrom::Start(self.base + u64::from(start)))?;
         let mut raw = vec![0u8; comp_len]; // proven <= avail above
         self.file.read_exact(&mut raw)?;
+        // Decrypted before the stored-or-packed test, with the sector index added (`0x651892`).
+        if let Some(key) = self.key {
+            decrypt_bytes(&mut raw, key.wrapping_add(i as u32));
+        }
 
         let out = if comp_len >= want {
             // A sector that would not shrink is stored verbatim.
@@ -452,6 +474,22 @@ impl Seek for ArchiveFile {
         })?;
         self.pos = pos;
         Ok(pos)
+    }
+}
+
+/// An encrypted file's key (`0x656690`): the type 3 hash of its base name, the name after the last
+/// `:` and then after the last `\` (`0x6567fa`, `0x65680a`), and with [`FLAG_FIX_KEY`]
+/// `(key + offset) ^ unpacked size`, the offset from the archive's header (`0x65687b`-`0x656888`).
+/// A `/` counts as a `\`, as in [`hash_string`]: benilla names paths either way, the client's data
+/// only with `\`.
+fn file_key(name: &str, block: &BlockEntry) -> u32 {
+    let base = name.rsplit(':').next().unwrap_or(name);
+    let base = base.rsplit(['\\', '/']).next().unwrap_or(base);
+    let key = hash_string(base, hash_type::FILE_KEY);
+    if block.flags & FLAG_FIX_KEY != 0 {
+        key.wrapping_add(block.file_pos) ^ block.file_size
+    } else {
+        key
     }
 }
 
@@ -804,6 +842,69 @@ mod tests {
         assert_eq!(out.len(), 612);
         assert!(out[..512].iter().all(|&b| b == 0));
         assert!(out[512..].iter().all(|&b| b == 7));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Where [`archive_with_one_block`] puts the data, from the header: the offset a fixed key adds.
+    const ONE_BLOCK_DATA_POS: u32 = 32 + 4 * 16 + 16;
+
+    /// An encrypted, key-fixed, compressed file: the offset table under the key − 1 and sector `i`
+    /// under the key + `i`, the key from the base name alone.
+    #[test]
+    fn an_encrypted_compressed_file_reads_its_bytes() {
+        use flate2::{write::ZlibEncoder, Compression};
+        use std::io::Write;
+        let zlib = |raw: &[u8]| {
+            let mut e = ZlibEncoder::new(vec![0x02u8], Compression::default());
+            e.write_all(raw).unwrap();
+            e.finish().unwrap()
+        };
+        let name = "World\\Azeroth\\a.m2";
+        let flags = FLAG_EXISTS | FLAG_COMPRESS | FLAG_ENCRYPTED | FLAG_FIX_KEY;
+        let (plain0, plain1) = ([3u8; 512], [9u8; 100]);
+        let block = BlockEntry {
+            file_pos: ONE_BLOCK_DATA_POS,
+            file_size: 612,
+            flags,
+        };
+        let key = file_key(name, &block);
+        assert_eq!(
+            key,
+            hash_string("a.m2", hash_type::FILE_KEY).wrapping_add(ONE_BLOCK_DATA_POS) ^ 612
+        );
+        let (mut s0, mut s1) = (zlib(&plain0), zlib(&plain1));
+        crypto::encrypt_bytes(&mut s0, key);
+        crypto::encrypt_bytes(&mut s1, key.wrapping_add(1));
+        let mut otab = Vec::new();
+        for off in [12, 12 + s0.len(), 12 + s0.len() + s1.len()] {
+            otab.extend_from_slice(&(off as u32).to_le_bytes());
+        }
+        crypto::encrypt_bytes(&mut otab, key.wrapping_sub(1));
+        let data = [otab, s0, s1].concat();
+        let (arc, path) = open_temp_kept(
+            "encrypted_compressed",
+            &archive_with_one_block(name, flags, &data, 612),
+        );
+        let out = arc.read_file("world/azeroth/A.M2").expect("decrypts");
+        assert_eq!(out, [&plain0[..], &plain1[..]].concat());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An encrypted stored file is cut into sectors all the same, each under its own key.
+    #[test]
+    fn an_encrypted_stored_file_reads_its_bytes() {
+        let name = "a.txt";
+        let flags = FLAG_EXISTS | FLAG_ENCRYPTED;
+        let plain: Vec<u8> = (0..600u32).map(|i| i as u8).collect();
+        let key = hash_string(name, hash_type::FILE_KEY);
+        let mut data = plain.clone();
+        crypto::encrypt_bytes(&mut data[..512], key);
+        crypto::encrypt_bytes(&mut data[512..], key.wrapping_add(1));
+        let (arc, path) = open_temp_kept(
+            "encrypted_stored",
+            &archive_with_one_entry(name, flags, &data),
+        );
+        assert_eq!(arc.read_file(name).expect("decrypts"), plain);
         let _ = std::fs::remove_file(&path);
     }
 

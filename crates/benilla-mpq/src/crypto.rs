@@ -1,6 +1,6 @@
 //! The Storm (MPQ) crypto, byte-exact with the client: the string hash and the block decryptor,
-//! both over one 0x500-entry table. 1.12.1 archives carry no encrypted files, so only the hash and
-//! block tables are ever decrypted.
+//! both over one 0x500-entry table. The stock 1.12.1 archives decrypt only their hash and block
+//! tables; a patch archive may also encrypt files, which the client decrypts sector by sector.
 
 /// The 0x500-entry encryption table, built at compile time by the seed walk the client runs.
 const fn encryption_table() -> [u32; 0x500] {
@@ -75,6 +75,28 @@ pub fn decrypt_block(data: &mut [u32], mut key: u32) {
     }
 }
 
+/// Decrypt a buffer's whole dwords in place, little-endian, as [`decrypt_block`]; a tail under
+/// four bytes is left as it is, since the client decrypts dword by dword (`0x651aa0`).
+pub fn decrypt_bytes(data: &mut [u8], key: u32) {
+    let (dwords, _) = data.as_chunks_mut::<4>();
+    let mut words: Vec<u32> = dwords.iter().map(|d| u32::from_le_bytes(*d)).collect();
+    decrypt_block(&mut words, key);
+    for (d, w) in dwords.iter_mut().zip(words) {
+        *d = w.to_le_bytes();
+    }
+}
+
+/// The inverse of [`decrypt_bytes`], for tests that build an encrypted file.
+#[cfg(test)]
+pub(crate) fn encrypt_bytes(data: &mut [u8], key: u32) {
+    let (dwords, _) = data.as_chunks_mut::<4>();
+    let mut words: Vec<u32> = dwords.iter().map(|d| u32::from_le_bytes(*d)).collect();
+    encrypt_block(&mut words, key);
+    for (d, w) in dwords.iter_mut().zip(words) {
+        *d = w.to_le_bytes();
+    }
+}
+
 /// The inverse of [`decrypt_block`], for tests that build the encrypted tables an archive stores.
 #[cfg(test)]
 pub(crate) fn encrypt_block(data: &mut [u32], mut key: u32) {
@@ -116,6 +138,17 @@ mod tests {
         let a = hash_string("path\\to\\FILE.blp", hash_type::TABLE_OFFSET);
         let b = hash_string("path/to/file.blp", hash_type::TABLE_OFFSET);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn decrypt_bytes_leaves_a_short_tail() {
+        let original = *b"0123456789";
+        let mut buf = original;
+        encrypt_bytes(&mut buf, 0x1234_5678);
+        assert_ne!(buf[..8], original[..8]);
+        assert_eq!(buf[8..], original[8..]);
+        decrypt_bytes(&mut buf, 0x1234_5678);
+        assert_eq!(buf, original);
     }
 
     #[test]
