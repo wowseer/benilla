@@ -469,8 +469,8 @@ fn query(
 /// holds `Data`, as the client hashes the ones beside it (`0x5b1170`; `None` without them, and the
 /// proof sends the stock client's digest), and the version the challenge declares.
 /// Deviation: `$WOW_AUTH_VERSION` (`major.minor.patch.build`, as `1.18.1.7272`) declares another
-/// version than 1.12.1 (5875), for a server whose realmd only admits its own client's; the world
-/// session still declares 5875.
+/// version than 1.12.1 (5875), because a server whose realmd admits only its own client's version
+/// refuses 5875 at the challenge; the world session still declares 5875.
 fn install_client() -> &'static benilla_protocol::auth::Client {
     use benilla_protocol::auth::{Client, ClientVersion, Executables};
     static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
