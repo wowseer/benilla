@@ -97,20 +97,25 @@ impl ChatMessage {
     }
 }
 
-/// Read the length-prefixed string shape (`u32 len` including NUL + bytes).
+/// Read the length-prefixed string shape: `u32 len`, then `len` bytes, which the client takes in
+/// place (`GetDataInSitu`, `0x419ac0`) and reads as a C string. The string ends at its first NUL,
+/// and the read goes on after all `len` bytes, so a server's zero padding past the NUL is skipped
+/// and the tag after it is the real one (`0x49d6f2`).
 fn read_len_string(r: &mut &[u8]) -> io::Result<String> {
     let len = read_u32_le(r)? as usize;
-    if len == 0 {
-        return Ok(String::new());
-    }
-    // The NUL is inside `len`; read through it via the cstring reader and sanity-cap first.
     if len > r.len() {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             format!("chat text length {len} exceeds remaining {}", r.len()),
         ));
     }
-    read_cstring(r)
+    let (bytes, rest) = r.split_at(len);
+    *r = rest;
+    let text = bytes
+        .iter()
+        .position(|&b| b == 0)
+        .map_or(bytes, |nul| &bytes[..nul]);
+    Ok(String::from_utf8_lossy(text).into_owned())
 }
 
 /// Read an `SMSG_MESSAGECHAT` body.

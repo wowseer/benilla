@@ -287,6 +287,7 @@ fn a_pin_account_logs_in_with_the_pin_pressed_on_its_grid() {
         "probe",
         "secret",
         auth::LOCALE_TAG_EN_US,
+        &auth::Client::STOCK,
         &mut |grid| {
             shown = Some(*grid);
             Ok(press(grid, PIN))
@@ -316,6 +317,7 @@ fn a_wrong_pin_is_refused_by_the_proof() {
         "probe",
         "secret",
         auth::LOCALE_TAG_EN_US,
+        &auth::Client::STOCK,
         &mut |grid| Ok(press(grid, 1234)),
         &mut |_| {},
     )
@@ -337,6 +339,7 @@ fn a_prompt_that_gives_no_pin_ends_the_logon() {
         "probe",
         "secret",
         auth::LOCALE_TAG_EN_US,
+        &auth::Client::STOCK,
         &mut |_| anyhow::bail!("cancelled"),
         &mut |_| {},
     )
