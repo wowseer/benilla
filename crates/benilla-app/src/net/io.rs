@@ -443,6 +443,7 @@ fn query(
             &req.user,
             &req.pass,
             req.locale,
+            install_client(),
             &mut press,
             &mut |_| {},
         ) {
@@ -462,6 +463,49 @@ fn query(
     }
     let refused = logon.realms_refused.then_some(RealmListEmptied::ListFailed);
     publish(events_tx, &logon.realms, !ok, emptied.or(refused))
+}
+
+/// The client the logon presents, settled once: the install's own binaries, from the folder that
+/// holds `Data`, as the client hashes the ones beside it (`0x5b1170`; `None` without them, and the
+/// proof sends the stock client's digest), and the version the challenge declares.
+/// Deviation: `$WOW_AUTH_VERSION` (`major.minor.patch.build`, as `1.18.1.7272`) declares another
+/// version than 1.12.1 (5875), for a server whose realmd only admits its own client's; the world
+/// session still declares 5875.
+fn install_client() -> &'static benilla_protocol::auth::Client {
+    use benilla_protocol::auth::{Client, ClientVersion, Executables};
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        let install =
+            benilla_formats::wow_data().and_then(|d| d.parent().map(std::path::Path::to_path_buf));
+        let executables = install.as_deref().and_then(Executables::read);
+        match (&install, &executables) {
+            (Some(dir), Some(_)) => bevy::log::info!(
+                "net: version digest keyed over the executables in {}",
+                dir.display()
+            ),
+            _ => bevy::log::info!("net: no client executables: the stock version digest goes"),
+        }
+        let version = match std::env::var("WOW_AUTH_VERSION") {
+            Ok(v) if !v.is_empty() => ClientVersion::parse(&v).unwrap_or_else(|| {
+                bevy::log::warn!("net: WOW_AUTH_VERSION={v:?} is not major.minor.patch.build");
+                ClientVersion::STOCK
+            }),
+            _ => ClientVersion::STOCK,
+        };
+        if version != ClientVersion::STOCK {
+            bevy::log::info!(
+                "net: the logon declares version {}.{}.{} build {}",
+                version.major,
+                version.minor,
+                version.patch,
+                version.build
+            );
+        }
+        Client {
+            version,
+            executables,
+        }
+    })
 }
 
 /// What a failed re-dial ends a query with, read as the reconnect it stands in for: a proof's
@@ -637,6 +681,7 @@ fn run(
             &req.user,
             &req.pass,
             req.locale,
+            install_client(),
             &mut |grid| {
                 let prompt = PIN_PROMPTS.fetch_add(1, Ordering::SeqCst) + 1;
                 stage(LoginStage::Pin {

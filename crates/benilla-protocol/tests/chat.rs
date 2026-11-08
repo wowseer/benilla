@@ -8,6 +8,29 @@ use benilla_protocol::messages::{self, ChannelNoticeTail};
 use benilla_protocol::ServerPacket;
 use common::hx;
 
+/// A text whose length runs past its NUL, as a server that sends a fixed buffer pads it: the text
+/// ends at the NUL, and the tag is read after the whole length (`GetDataInSitu`, `0x419ac0`;
+/// `0x49d6f2`), never from the padding.
+#[test]
+fn message_chat_skips_padding_past_the_text_nul() {
+    // GUILD, LANG_ADDON, a sender guid, length 16: "TW_SHOP\tok", its NUL, five zeros; then GM.
+    let body = hx(concat!(
+        "03ffffffffb34e9d3b0000000010000000",
+        "54575f53484f50096f6b00",
+        "0000000000",
+        "03",
+    ));
+    match messages::parse_server(messages::opcode::SMSG_MESSAGECHAT, &body).unwrap() {
+        ServerPacket::MessageChat(m) => {
+            assert_eq!(m.chat_type, messages::CHAT_MSG_GUILD);
+            assert_eq!(m.sender_guid, 0x3b9d_4eb3);
+            assert_eq!(m.text, "TW_SHOP\tok");
+            assert_eq!(m.chat_tag, messages::chat_tag::GM);
+        }
+        _ => panic!("expected MessageChat"),
+    }
+}
+
 /// The five `SMSG_MESSAGECHAT` shapes (vmangos `Chat/Chat.cpp:2542-2599`): SAY/PARTY/YELL send
 /// the sender guid twice; MONSTER_SAY/YELL a guid, a length-prefixed name and a target guid;
 /// CHANNEL a cstring channel, a `u32` rank and a guid; MONSTER_WHISPER, the raid-boss types and

@@ -4,22 +4,20 @@
 //! `AUTH_VERSION_MISMATCH`, "Wrong client version"), and the computed `SHA1(A ‖ H)`
 //! ([`auth::version_proof`]). A non-strict server accepts both.
 //!
-//! With an install directory it also derives that install's own digest the way the 1.12 client
-//! does, HMAC-SHA1 keyed by the challenge over five binaries, and says whether it is the stock
-//! one. Deviation: benilla always sends the published constant instead, because an install without
-//! those binaries could never answer for itself.
+//! With an install directory the computed arm keys that install's own five binaries
+//! ([`auth::Executables`]), as the client does, and the report says whether their digest is the
+//! stock one; without one it sends the stock client's stored digest.
 //!
 //! Usage: `cargo run -p benilla-protocol --example version_check_probe -- <host[:port]> <user>
 //! <pass> [install-dir]`. The local strict-mode realmd is `127.0.0.1:3725`, the ordinary one 3724.
 
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use benilla_protocol::{auth, host_port, AuthReject, AUTH_PORT, CLIENT_BUILD};
 use benilla_srp::{NormalizedString, PublicKey, SrpClientChallenge};
-use sha1::{Digest, Sha1};
 
 /// Which `crc_hash` the arm puts in the proof packet.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,7 +38,14 @@ impl Arm {
 }
 
 /// One full handshake with `arm`'s `crc_hash`: `None` when accepted, else the `WOW_FAIL_*` byte.
-fn attempt(host: &str, port: u16, user: &str, pass: &str, arm: Arm) -> Result<Option<u8>> {
+fn attempt(
+    host: &str,
+    port: u16,
+    user: &str,
+    pass: &str,
+    arm: Arm,
+    own: Option<&auth::Executables>,
+) -> Result<Option<u8>> {
     let user_n = NormalizedString::new(user).map_err(|e| anyhow!("invalid username: {e}"))?;
     let pass_n = NormalizedString::new(pass).map_err(|e| anyhow!("invalid password: {e}"))?;
 
@@ -53,7 +58,7 @@ fn attempt(host: &str, port: u16, user: &str, pass: &str, arm: Arm) -> Result<Op
         auth::write_logon_challenge(
             &mut stream,
             &user.to_uppercase(),
-            CLIENT_BUILD,
+            auth::ClientVersion::STOCK,
             auth::LOCALE_TAG_EN_US,
         )
         .context("sending logon challenge")?;
@@ -74,15 +79,16 @@ fn attempt(host: &str, port: u16, user: &str, pass: &str, arm: Arm) -> Result<Op
             b,
             reply.salt,
         );
-        let salt = match arm {
-            Arm::Computed => reply.crc_salt,
-            Arm::Zeros => [0u8; 16],
+        let (salt, own) = match arm {
+            Arm::Computed => (reply.crc_salt, own),
+            Arm::Zeros => ([0u8; 16], None),
         };
         auth::write_logon_proof(
             &mut stream,
             challenge.client_public_key(),
             challenge.client_proof(),
             &salt,
+            own,
             None,
         )
         .context("sending logon proof")?;
@@ -98,76 +104,37 @@ fn attempt(host: &str, port: u16, user: &str, pass: &str, arm: Arm) -> Result<Op
     Err(anyhow!("eight dials, every `B` ambiguous — try again"))
 }
 
-/// The five files the 1.12 client hashes, in this order (`ChecksumExecutables` at `0x5b1170`, the
-/// table at `0x85def0`); no other of the 120 orders gives the published digest.
-const SCANNED: [&str; 5] = [
-    "WoW.exe",
-    "fmod.dll",
-    "ijl15.dll",
-    "dbghelp.dll",
-    "unicows.dll",
-];
-
-/// HMAC-SHA1 keyed by the 16-byte `crc_salt`, framed as the client does (`0x5b117e`–`0x5b11b6`);
-/// the key is always 16 bytes, so there is no long-key step, as in the client.
-fn hmac_sha1(key: &[u8; 16], msg: &[u8]) -> [u8; 20] {
-    let mut ipad = [0x36u8; 64];
-    let mut opad = [0x5cu8; 64];
-    for (i, k) in key.iter().enumerate() {
-        ipad[i] ^= k;
-        opad[i] ^= k;
-    }
-    let mut inner = Sha1::new();
-    inner.update(ipad);
-    inner.update(msg);
-    let mut outer = Sha1::new();
-    outer.update(opad);
-    outer.update(inner.finalize());
-    outer.finalize().into()
-}
-
-/// Derive `H` from an install the way the 1.12 client does. An unreadable file contributes no
-/// bytes, as in the client (`0x5b11eb`, `0x5b1212`, `0x5b121f`, `0x5b1246`).
-fn report_install(install_dir: &Path, crc_salt: &[u8; 16]) {
+/// What the install's five binaries are, and whether their digest under `crc_salt` is the stock
+/// client's, the one sent for an install without them.
+fn report_install(install_dir: &std::path::Path, crc_salt: &[u8; 16]) {
     println!("\n  install {}", install_dir.display());
-    let mut msg = Vec::new();
-    let mut missing = Vec::new();
-    for name in SCANNED {
-        match std::fs::read(install_dir.join(name)) {
-            Ok(bytes) => {
-                println!("    {name:<12} {} bytes", bytes.len());
-                msg.extend_from_slice(&bytes);
-            }
-            Err(e) => {
-                println!("    {name:<12} UNREADABLE ({e}) — skipped, as the client skips it");
-                missing.push(name);
-            }
+    for name in auth::CHECKSUMMED_EXECUTABLES {
+        match std::fs::metadata(install_dir.join(name)) {
+            Ok(m) => println!("    {name:<12} {} bytes", m.len()),
+            Err(e) => println!("    {name:<12} UNREADABLE ({e})"),
         }
     }
-    let h = hmac_sha1(crc_salt, &msg);
-    let hex: String = h.iter().map(|b| format!("{b:02X}")).collect();
+    let Some(own) = auth::Executables::read(install_dir) else {
+        println!("    → not all five are readable: the logon sends the stock client's digest");
+        return;
+    };
+    let hex: String = own
+        .digest(crc_salt)
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect();
     println!("    H = {hex}");
     // Compare through `SHA1(A ‖ H)`, what we send: equal proofs for one `A` mean equal `H`.
     let a = [0u8; 32];
-    let matches = {
-        let mut sha = Sha1::new();
-        sha.update(a);
-        sha.update(h);
-        let derived: [u8; 20] = sha.finalize().into();
-        derived == auth::version_proof(crc_salt, &a)
-    };
+    let stock =
+        auth::version_proof(crc_salt, &a, Some(&own)) == auth::version_proof(crc_salt, &a, None);
     println!(
         "    → {}",
-        if matches {
-            "matches the digest we send: this install is the stock one for the OS we declare"
-        } else if !missing.is_empty() {
-            "differs, and files are missing — an install like this could never answer the \
-             challenge for itself, which is why we send a constant instead"
+        if stock {
+            "the stock client's digest for the OS we declare"
         } else {
-            "differs from the digest we send. On macOS that is expected and harmless: we declare \
-             OSX, so we send the Mac client's digest, while your install is the Windows one. \
-             Otherwise one of the five is patched. Login is unaffected either way — the digest we \
-             send does not come from here"
+            "not the stock digest: one of the five is patched, or we declare OSX (then the stock \
+             Mac digest goes instead), and a server that keeps only the stock digest refuses it"
         }
     );
 }
@@ -184,15 +151,15 @@ fn main() -> Result<()> {
     };
     let (host, port) = host_port(&host_arg, AUTH_PORT);
 
-    // Our digest holds only for the one salt every mangos-family realmd sends; under any other,
-    // the computed arm sends zeros too.
+    // Without an install, the stock digest holds only for the one salt every mangos-family realmd
+    // sends; under any other, the computed arm sends zeros too.
     let mut stream =
         TcpStream::connect((host, port)).with_context(|| format!("connecting to {host}:{port}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     auth::write_logon_challenge(
         &mut stream,
         &user.to_uppercase(),
-        CLIENT_BUILD,
+        auth::ClientVersion::STOCK,
         auth::LOCALE_TAG_EN_US,
     )?;
     let crc_salt = auth::read_challenge_reply(&mut stream)?
@@ -200,7 +167,8 @@ fn main() -> Result<()> {
         .crc_salt;
     drop(stream); // no proof follows, so realmd records nothing for this dial
     let hex: String = crc_salt.iter().map(|b| format!("{b:02x}")).collect();
-    let known = auth::version_proof(&crc_salt, &[0u8; 32]) != [0u8; 20];
+    let own = install.as_deref().and_then(auth::Executables::read);
+    let known = auth::version_proof(&crc_salt, &[0u8; 32], own.as_ref()) != [0u8; 20];
     println!("{host}:{port} — build {CLIENT_BUILD}, crc_salt {hex}");
     println!(
         "  we {} an integrity digest for that challenge\n",
@@ -208,7 +176,7 @@ fn main() -> Result<()> {
     );
 
     for arm in [Arm::Zeros, Arm::Computed] {
-        let verdict = match attempt(host, port, &user, &pass, arm)? {
+        let verdict = match attempt(host, port, &user, &pass, arm, own.as_ref())? {
             None => "ACCEPTED".to_string(),
             Some(0x09) => {
                 "REJECTED 0x09 WOW_FAIL_VERSION_INVALID (\"Wrong client version\")".into()

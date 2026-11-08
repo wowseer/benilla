@@ -4,6 +4,7 @@
 
 use std::io::{Read, Write};
 use std::net::Ipv4Addr;
+use std::path::Path;
 
 use anyhow::{bail, Result};
 use sha1::{Digest, Sha1};
@@ -216,23 +217,70 @@ pub struct PinProof {
     pub hash: [u8; 20],
 }
 
+/// The version a logon challenge declares: `major.minor.patch` and the build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClientVersion {
+    pub major: u8,
+    pub minor: u8,
+    pub patch: u8,
+    pub build: u16,
+}
+
+impl ClientVersion {
+    /// 1.12.1, build 5875: the reference's.
+    pub const STOCK: Self = Self {
+        major: 1,
+        minor: 12,
+        patch: 1,
+        build: crate::CLIENT_BUILD,
+    };
+
+    /// `major.minor.patch.build`, as `1.18.1.7272`.
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut parts = s.trim().split('.');
+        let version = Self {
+            major: parts.next()?.parse().ok()?,
+            minor: parts.next()?.parse().ok()?,
+            patch: parts.next()?.parse().ok()?,
+            build: parts.next()?.parse().ok()?,
+        };
+        parts.next().is_none().then_some(version)
+    }
+}
+
+/// The client a logon presents: the version its challenge declares and the executables its
+/// version digest is keyed over ([`version_proof`]).
+pub struct Client {
+    pub version: ClientVersion,
+    pub executables: Option<Executables>,
+}
+
+impl Client {
+    /// The stock 1.12.1 client, with its stored digest.
+    pub const STOCK: Self = Self {
+        version: ClientVersion::STOCK,
+        executables: None,
+    };
+}
+
 /// Send `CMD_AUTH_LOGON_CHALLENGE_Client`. `account_name` must be uppercased, as the SRP6 hashes
-/// use it; `build` is 5875. `locale` is the client's locale tag, `[0xc2a2a4]` (`0x5b2115`): the
-/// configured string packed big-endian, written like the other tags as a little-endian dword, so
-/// "enGB" reaches the wire as `B G n e`.
+/// use it; `version` is [`ClientVersion::STOCK`] but for a server that asks for another. `locale`
+/// is the client's locale tag, `[0xc2a2a4]` (`0x5b2115`): the configured string packed
+/// big-endian, written like the other tags as a little-endian dword, so "enGB" reaches the wire
+/// as `B G n e`.
 pub fn write_logon_challenge(
     w: &mut impl Write,
     account_name: &str,
-    build: u16,
+    version: ClientVersion,
     locale: u32,
 ) -> std::io::Result<()> {
     // Everything after the 2-byte size field, assembled first so we can prefix its length.
     let mut body = Vec::with_capacity(34 + account_name.len());
     body.extend_from_slice(&GAME_NAME_WOW.to_le_bytes());
-    body.push(1); // version major
-    body.push(12); // version minor
-    body.push(1); // version patch
-    body.extend_from_slice(&build.to_le_bytes());
+    body.push(version.major);
+    body.push(version.minor);
+    body.push(version.patch);
+    body.extend_from_slice(&version.build.to_le_bytes());
     body.extend_from_slice(&PLATFORM_X86.to_le_bytes());
     body.extend_from_slice(&client_os().to_le_bytes());
     body.extend_from_slice(&locale.to_le_bytes());
@@ -333,14 +381,74 @@ const INTEGRITY_HASH_5875_MACOS: [u8; 20] = [
     0x1b, 0xb5, 0x13, 0xe5,
 ];
 
-/// The integrity digest `H` for `crc_salt`, known only for [`MANGOS_VERSION_CHALLENGE`].
-/// Deviation: a stored per-OS constant, not the reference's HMAC over its own executables
-/// (`0x5b1170`), because every mangos-family realmd issues this one salt.
-fn integrity_hash(crc_salt: &[u8; 16]) -> Option<[u8; 20]> {
+/// The five binaries the 1.12 client hashes into `H`, in this order (`ChecksumExecutables` at
+/// `0x5b1170`, the table at `0x85def0`); no other of the 120 orders gives the published digest.
+pub const CHECKSUMMED_EXECUTABLES: [&str; 5] = [
+    "WoW.exe",
+    "fmod.dll",
+    "ijl15.dll",
+    "dbghelp.dll",
+    "unicows.dll",
+];
+
+/// An install's own [`CHECKSUMMED_EXECUTABLES`], concatenated in order: the message the 1.12
+/// client's `H` is an HMAC over, read once so each logon only keys it.
+pub struct Executables(Vec<u8>);
+
+impl Executables {
+    /// The five from `install_dir`, matched without case as on the Windows filesystem the client
+    /// ran on, or `None` when any is unreadable.
+    pub fn read(install_dir: &Path) -> Option<Self> {
+        let entries: Vec<_> = std::fs::read_dir(install_dir)
+            .ok()?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+        let mut message = Vec::new();
+        for name in CHECKSUMMED_EXECUTABLES {
+            let path = entries.iter().find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+            })?;
+            message.extend_from_slice(&std::fs::read(path).ok()?);
+        }
+        Some(Self(message))
+    }
+
+    /// `H` for `crc_salt`: HMAC-SHA1 keyed by the 16-byte salt, framed as the client does
+    /// (`0x5b117e`–`0x5b11b6`); the key is always 16 bytes, so there is no long-key step.
+    pub fn digest(&self, crc_salt: &[u8; 16]) -> [u8; 20] {
+        let mut ipad = [0x36u8; 64];
+        let mut opad = [0x5cu8; 64];
+        for (i, k) in crc_salt.iter().enumerate() {
+            ipad[i] ^= k;
+            opad[i] ^= k;
+        }
+        let mut inner = Sha1::new();
+        inner.update(ipad);
+        inner.update(&self.0);
+        let mut outer = Sha1::new();
+        outer.update(opad);
+        outer.update(inner.finalize());
+        outer.finalize().into()
+    }
+}
+
+/// The integrity digest `H` for `crc_salt`: the install's own, as the reference derives it from
+/// its executables (`0x5b1170`), for any salt.
+/// Deviation: an install without the five, or a macOS host (which declares `OSX`, so the server
+/// expects the Mac client's `H` and not the Windows binaries'), sends the stock client's stored
+/// per-OS digest instead, known only for [`MANGOS_VERSION_CHALLENGE`], because such an install
+/// could never answer for itself.
+fn integrity_hash(crc_salt: &[u8; 16], executables: Option<&Executables>) -> Option<[u8; 20]> {
+    let macos = client_os() == OS_MACOS;
+    if let Some(own) = executables.filter(|_| !macos) {
+        return Some(own.digest(crc_salt));
+    }
     if *crc_salt != MANGOS_VERSION_CHALLENGE {
         return None;
     }
-    Some(if client_os() == OS_MACOS {
+    Some(if macos {
         INTEGRITY_HASH_5875_MACOS
     } else {
         INTEGRITY_HASH_5875_WINDOWS
@@ -348,9 +456,14 @@ fn integrity_hash(crc_salt: &[u8; 16]) -> Option<[u8; 20]> {
 }
 
 /// The proof's `crc_hash`: `SHA1(A ‖ H)` over `A`'s wire bytes (realmd hashes `lp->A` as
-/// received), or twenty zeros for an unknown salt, which only a strict server refuses.
-pub fn version_proof(crc_salt: &[u8; 16], client_public_key: &[u8; 32]) -> [u8; 20] {
-    match integrity_hash(crc_salt) {
+/// received), or twenty zeros when there is no `H` ([`integrity_hash`]), which only a strict
+/// server refuses.
+pub fn version_proof(
+    crc_salt: &[u8; 16],
+    client_public_key: &[u8; 32],
+    executables: Option<&Executables>,
+) -> [u8; 20] {
+    match integrity_hash(crc_salt, executables) {
         Some(h) => {
             let mut sha = Sha1::new();
             sha.update(client_public_key);
@@ -361,21 +474,22 @@ pub fn version_proof(crc_salt: &[u8; 16], client_public_key: &[u8; 32]) -> [u8; 
     }
 }
 
-/// Send `CMD_AUTH_LOGON_PROOF_Client`, computing `crc_hash` from the challenge's `crc_salt`. The
-/// security byte is the challenge's, 0 with no PIN, and a PIN's salt and hash follow it
-/// (`0x5bbc80`-`0x5bbcad`).
+/// Send `CMD_AUTH_LOGON_PROOF_Client`, computing `crc_hash` from the challenge's `crc_salt` and the
+/// install's `executables` ([`version_proof`]). The security byte is the challenge's, 0 with no
+/// PIN, and a PIN's salt and hash follow it (`0x5bbc80`-`0x5bbcad`).
 pub fn write_logon_proof(
     w: &mut impl Write,
     client_public_key: &[u8; 32],
     client_proof: &[u8; 20],
     crc_salt: &[u8; 16],
+    executables: Option<&Executables>,
     pin: Option<&PinProof>,
 ) -> std::io::Result<()> {
     let mut packet = Vec::with_capacity(1 + 32 + 20 + 20 + 1 + 1 + 16 + 20);
     packet.push(CMD_AUTH_LOGON_PROOF);
     packet.extend_from_slice(client_public_key);
     packet.extend_from_slice(client_proof);
-    packet.extend_from_slice(&version_proof(crc_salt, client_public_key));
+    packet.extend_from_slice(&version_proof(crc_salt, client_public_key, executables));
     packet.push(0); // number_of_telemetry_keys
     match pin {
         Some(pin) => {
@@ -392,6 +506,18 @@ pub fn write_logon_proof(
 /// read), or an [`AuthReject`].
 pub fn read_proof_reply(r: &mut impl Read) -> Result<Option<[u8; 20]>> {
     let opcode = read_u8(r)?;
+    if opcode == CMD_AUTH_LOGON_CHALLENGE {
+        // The client dispatches each reply by its opcode, so a challenge reply after the proof is
+        // `OnLogonChallenge`'s (`0x5baa20`): mangos-family realmds refuse a failed version check
+        // this way, `0x00 · 0x00 · WOW_FAIL_VERSION_INVALID` (cmangos `_HandleLogonProof`).
+        let _protocol_version = read_u8(r)?;
+        let result = read_u8(r)?;
+        return Err(AuthReject {
+            code: result,
+            reply: LogonReply::Challenge,
+        }
+        .into());
+    }
     if opcode != CMD_AUTH_LOGON_PROOF {
         bail!("expected CMD_AUTH_LOGON_PROOF (0x01), got {opcode:#x}");
     }
@@ -592,7 +718,7 @@ mod tests {
         let bias = |tz: &str, west: i32| {
             let _zone = Zone::set(tz, west);
             let mut out = Vec::new();
-            write_logon_challenge(&mut out, "AB", 5875, LOCALE_TAG_EN_US).unwrap();
+            write_logon_challenge(&mut out, "AB", ClientVersion::STOCK, LOCALE_TAG_EN_US).unwrap();
             i32::from_le_bytes(out[25..29].try_into().unwrap())
         };
         assert_eq!(bias("NPT-05:45", -345), 345);
@@ -606,7 +732,7 @@ mod tests {
     fn a_failed_zone_query_sends_no_bias() {
         super::zone::HELD.set(Some(None));
         let mut out = Vec::new();
-        write_logon_challenge(&mut out, "AB", 5875, LOCALE_TAG_EN_US).unwrap();
+        write_logon_challenge(&mut out, "AB", ClientVersion::STOCK, LOCALE_TAG_EN_US).unwrap();
         super::zone::HELD.set(None);
         assert_eq!(i32::from_le_bytes(out[25..29].try_into().unwrap()), 0);
     }
@@ -618,7 +744,13 @@ mod tests {
     fn the_challenge_carries_the_locale_tag() {
         let _zone = Zone::set("UTC0", 0);
         let mut out = Vec::new();
-        write_logon_challenge(&mut out, "AB", 5875, u32::from_be_bytes(*b"enGB")).unwrap();
+        write_logon_challenge(
+            &mut out,
+            "AB",
+            ClientVersion::STOCK,
+            u32::from_be_bytes(*b"enGB"),
+        )
+        .unwrap();
         let mut want = vec![
             0x00, 0x03, 0x20, 0x00, // command, protocol 3, 32 bytes follow
             b'W', b'o', b'W', 0x00, // game
@@ -658,7 +790,7 @@ mod tests {
         } else {
             "9b95cd41edd719fddf237294b8aca17010e71703"
         };
-        let got = version_proof(&MANGOS_VERSION_CHALLENGE, &test_public_key());
+        let got = version_proof(&MANGOS_VERSION_CHALLENGE, &test_public_key(), None);
         assert_eq!(
             got.iter().map(|b| format!("{b:02x}")).collect::<String>(),
             expected
@@ -669,7 +801,139 @@ mod tests {
     fn an_unknown_version_challenge_is_answered_with_zeros() {
         let mut salt = MANGOS_VERSION_CHALLENGE;
         salt[0] ^= 0xff;
-        assert_eq!(version_proof(&salt, &test_public_key()), [0u8; 20]);
+        assert_eq!(version_proof(&salt, &test_public_key(), None), [0u8; 20]);
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// RFC 2202's HMAC-SHA1 case 2: a short key is zero-padded, so `"Jefe"` is the 16-byte salt
+    /// `"Jefe"` followed by twelve zeros.
+    #[test]
+    fn the_executables_digest_is_hmac_sha1_keyed_by_the_salt() {
+        let mut salt = [0u8; 16];
+        salt[..4].copy_from_slice(b"Jefe");
+        let message = Executables(b"what do ya want for nothing?".to_vec());
+        assert_eq!(
+            hex(&message.digest(&salt)),
+            "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"
+        );
+    }
+
+    /// A scratch install folder holding `files`, removed on drop.
+    struct Install(std::path::PathBuf);
+
+    impl Install {
+        fn with(tag: &str, files: &[(&str, &[u8])]) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("benilla-executables-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for (name, bytes) in files {
+                std::fs::write(dir.join(name), bytes).unwrap();
+            }
+            Self(dir)
+        }
+    }
+
+    impl Drop for Install {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The five are concatenated in the client's order, whatever case the install spells them in.
+    #[test]
+    fn the_executables_are_read_in_order_without_case() {
+        let install = Install::with(
+            "order",
+            &[
+                ("unicows.dll", b"5"),
+                ("DBGHELP.DLL", b"4"),
+                ("ijl15.dll", b"3"),
+                ("Fmod.dll", b"2"),
+                ("Wow.exe", b"1"),
+                ("Launcher.exe", b"x"),
+            ],
+        );
+        let read = Executables::read(&install.0).expect("all five present");
+        assert_eq!(read.0, b"12345");
+    }
+
+    #[test]
+    fn an_install_missing_one_executable_has_none() {
+        let install = Install::with(
+            "missing",
+            &[
+                ("WoW.exe", b"1"),
+                ("fmod.dll", b"2"),
+                ("ijl15.dll", b"3"),
+                ("dbghelp.dll", b"4"),
+            ],
+        );
+        assert!(Executables::read(&install.0).is_none());
+    }
+
+    /// An install's own executables answer any salt with their own digest, except on macOS, which
+    /// declares `OSX` and so sends the stock Mac digest.
+    #[test]
+    fn the_install_executables_key_the_version_proof() {
+        let own = Executables(b"a patched client".to_vec());
+        let mut salt = MANGOS_VERSION_CHALLENGE;
+        salt[0] ^= 0xff;
+        let a = test_public_key();
+        let stock = version_proof(&MANGOS_VERSION_CHALLENGE, &a, None);
+        if cfg!(target_os = "macos") {
+            assert_eq!(version_proof(&salt, &a, Some(&own)), [0u8; 20]);
+            assert_eq!(
+                version_proof(&MANGOS_VERSION_CHALLENGE, &a, Some(&own)),
+                stock
+            );
+        } else {
+            let mut sha = Sha1::new();
+            sha.update(a);
+            sha.update(own.digest(&salt));
+            let want: [u8; 20] = sha.finalize().into();
+            assert_eq!(version_proof(&salt, &a, Some(&own)), want);
+            assert_ne!(
+                version_proof(&MANGOS_VERSION_CHALLENGE, &a, Some(&own)),
+                stock
+            );
+        }
+    }
+
+    /// A refused version check answers the proof with a challenge reply, read as one.
+    #[test]
+    fn a_challenge_reply_to_the_proof_is_a_challenge_refusal() {
+        let e = read_proof_reply(&mut &[0x00u8, 0x00, 0x09][..]).unwrap_err();
+        let r = e.downcast_ref::<AuthReject>().unwrap();
+        assert_eq!((r.code, r.reply), (0x09, LogonReply::Challenge));
+    }
+
+    #[test]
+    fn a_client_version_parses_from_four_numbers() {
+        assert_eq!(
+            ClientVersion::parse("1.18.1.7272"),
+            Some(ClientVersion {
+                major: 1,
+                minor: 18,
+                patch: 1,
+                build: 7272
+            })
+        );
+        assert_eq!(ClientVersion::parse("1.12.1"), None);
+        assert_eq!(ClientVersion::parse("1.12.1.5875.0"), None);
+        assert_eq!(ClientVersion::parse("1.300.1.5875"), None);
+    }
+
+    /// The declared version takes the place of 1.12.1 (5875) in the challenge.
+    #[test]
+    fn the_challenge_carries_the_declared_version() {
+        let mut out = Vec::new();
+        let version = ClientVersion::parse("1.18.1.7272").unwrap();
+        write_logon_challenge(&mut out, "AB", version, LOCALE_TAG_EN_US).unwrap();
+        assert_eq!(&out[8..13], &[1, 18, 1, 0x68, 0x1c]);
     }
 
     /// `opcode · A[32] · M1[20] · crc_hash[20] · num_keys · security_flag`, 75 bytes.
@@ -678,7 +942,7 @@ mod tests {
         let a = test_public_key();
         let m1: [u8; 20] = std::array::from_fn(|i| (i as u8).wrapping_mul(13).wrapping_add(4));
         let mut packet = Vec::new();
-        write_logon_proof(&mut packet, &a, &m1, &MANGOS_VERSION_CHALLENGE, None).unwrap();
+        write_logon_proof(&mut packet, &a, &m1, &MANGOS_VERSION_CHALLENGE, None, None).unwrap();
 
         assert_eq!(packet.len(), 1 + 32 + 20 + 20 + 1 + 1);
         assert_eq!(packet[0], CMD_AUTH_LOGON_PROOF);
@@ -686,7 +950,7 @@ mod tests {
         assert_eq!(&packet[33..53], &m1);
         assert_eq!(
             &packet[53..73],
-            &version_proof(&MANGOS_VERSION_CHALLENGE, &a)
+            &version_proof(&MANGOS_VERSION_CHALLENGE, &a, None)
         );
         assert_eq!(&packet[73..], &[0, 0]);
     }
@@ -955,12 +1219,20 @@ mod tests {
             hash: std::array::from_fn(|i| 0x80 + i as u8),
         };
         let mut packet = Vec::new();
-        write_logon_proof(&mut packet, &a, &m1, &MANGOS_VERSION_CHALLENGE, Some(&pin)).unwrap();
+        write_logon_proof(
+            &mut packet,
+            &a,
+            &m1,
+            &MANGOS_VERSION_CHALLENGE,
+            None,
+            Some(&pin),
+        )
+        .unwrap();
 
         let mut want = vec![CMD_AUTH_LOGON_PROOF];
         want.extend_from_slice(&a);
         want.extend_from_slice(&m1);
-        want.extend_from_slice(&version_proof(&MANGOS_VERSION_CHALLENGE, &a));
+        want.extend_from_slice(&version_proof(&MANGOS_VERSION_CHALLENGE, &a, None));
         want.extend_from_slice(&[0x00, 0x01]); // no keys, the security byte
         want.extend_from_slice(&[
             0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d,

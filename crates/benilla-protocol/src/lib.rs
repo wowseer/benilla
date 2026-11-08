@@ -332,6 +332,7 @@ pub fn logon(realmlist: &str, username: &str, password: &str, locale: u32) -> Re
         username,
         password,
         locale,
+        &auth::Client::STOCK,
         &mut |_| {
             Err(anyhow!(
                 "the account asks for a PIN, which this logon cannot enter"
@@ -352,11 +353,16 @@ pub fn logon(realmlist: &str, username: &str, password: &str, locale: u32) -> Re
 /// one that asks for one is `pin`'s call) and [`LoginStage::ProofSent`] once the proof is out
 /// (`0x5b1f93`). A redial for a fresh server key (below) is no new state, and a reply that
 /// authenticates with no exchange reports none.
+///
+/// `client` is what the logon presents: the version its challenge declares and the install's own
+/// binaries, which the proof's version digest is keyed over ([`auth::version_proof`]);
+/// [`auth::Client::STOCK`] is the stock 1.12.1 client.
 pub fn logon_with_pin(
     realmlist: &str,
     username: &str,
     password: &str,
     locale: u32,
+    client: &auth::Client,
     pin: &mut dyn FnMut(&[u8; 10]) -> Result<Vec<u8>>,
     stage: &mut dyn FnMut(LoginStage),
 ) -> Result<Logon> {
@@ -380,7 +386,7 @@ pub fn logon_with_pin(
             auth::write_logon_challenge(
                 &mut stream,
                 &username.to_uppercase(),
-                CLIENT_BUILD,
+                client.version,
                 locale,
             )
             .context("sending logon challenge")?;
@@ -433,6 +439,7 @@ pub fn logon_with_pin(
         challenge.client_public_key(),
         challenge.client_proof(),
         &reply.crc_salt,
+        client.executables.as_ref(),
         pin_proof.as_ref(),
     )
     .context("sending logon proof")?;
