@@ -40,24 +40,43 @@
         -- in place, with Sound and UI Options each laid over the rung above it, so they take no
         -- space: a width or height of 0 is no size in 1.12's layout, not a flat rect.
 
+        -- An interface that adds a rung above Options and hangs Options under it (OctoWoW's
+        -- Shop) keeps that rung on top, Options under it, and the frame grows by its height.
+        local _, lead = GameMenuButtonOptions:GetPoint(1)
+        if ( not lead or lead == GameMenuFrame or lead:GetObjectType() ~= "Button" ) then
+            lead = nil
+        end
+
         -- Literal: 1.12 has no GAMEMENU_OPTIONS; its OPTIONS_MENU is "Options Menu".
         GameMenuButtonOptions:SetText("Options")
         GameMenuButtonOptions:ClearAllPoints()
-        GameMenuButtonOptions:SetPoint("TOP", GameMenuFrame, "TOP", 0, -32)
+        if ( lead ) then
+            lead:ClearAllPoints()
+            lead:SetPoint("TOP", GameMenuFrame, "TOP", 0, -32)
+            GameMenuButtonOptions:SetPoint("TOP", lead, "BOTTOM", 0, 0)
+            GameMenuFrame:SetHeight(GameMenuFrame:GetHeight() + lead:GetHeight())
+        else
+            GameMenuButtonOptions:SetPoint("TOP", GameMenuFrame, "TOP", 0, -32)
+        end
+        -- An interface with its own options rung may ship this one hidden.
+        GameMenuButtonOptions:Show()
         GameMenuButtonOptions:SetScript("OnClick", function()
             PlaySound("igMainMenuOption")
             HideUIPanel(GameMenuFrame)
             ShowUIPanel(BenillaOptionsFrame)
         end)
 
-        for _, fold in ipairs({
-            { GameMenuButtonSoundOptions, GameMenuButtonOptions },
-            { GameMenuButtonUIOptions, GameMenuButtonSoundOptions },
-        }) do
-            local button, above = fold[1], fold[2]
-            button:Hide()
-            button:ClearAllPoints()
-            button:SetPoint("TOP", above, "BOTTOM", 0, button:GetHeight())
+        -- Sound and UI Options fold where the interface has them, each over the nearest rung
+        -- above it that is there; by name, since a missing one would end an `ipairs` early.
+        local above = GameMenuButtonOptions
+        for _, name in ipairs({ "GameMenuButtonSoundOptions", "GameMenuButtonUIOptions" }) do
+            local button = getglobal(name)
+            if ( button ) then
+                button:Hide()
+                button:ClearAllPoints()
+                button:SetPoint("TOP", above, "BOTTOM", 0, button:GetHeight())
+                above = button
+            end
         end
         -- Key Bindings keeps its stock anchor, 1 under UI Options: the era rungs hang from its
         -- top, so an addon that inserts a button above it and re-anchors it under that button
