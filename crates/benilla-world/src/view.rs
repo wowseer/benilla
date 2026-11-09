@@ -327,6 +327,16 @@ pub fn world_fovy(aspect: f32) -> f32 {
     CAM_FOV / (aspect * aspect + 1.0).sqrt()
 }
 
+/// `[cam+0x40]` itself: [`CAM_FOV`], unless SuperWoW's `FoV` CVar sets another (0.1 to 3.14).
+#[derive(Resource, Clone, Copy)]
+pub struct CamFov(pub f32);
+
+impl Default for CamFov {
+    fn default() -> Self {
+        Self(CAM_FOV)
+    }
+}
+
 /// The held fraction of `[cam+0x40]`: 1 normally; the spyglass (aura 76, `0x50d320`) writes
 /// `n × π/180` there, so its zoom scales the field of view before `0x5c3cc0` sees it.
 #[derive(Resource, Clone, Copy)]
@@ -342,6 +352,7 @@ impl Default for FovZoom {
 /// window resize re-derives it as `0x50ab79`-`0x50ab93` re-reads the frame's aspect.
 pub fn stamp_world_fov(
     zoom: Res<FovZoom>,
+    cam_fov: Option<Res<CamFov>>,
     mut cam: Query<(&Camera, &mut Projection), With<WorldCamera>>,
 ) {
     for (camera, mut proj) in &mut cam {
@@ -351,7 +362,8 @@ pub fn stamp_world_fov(
         else {
             continue;
         };
-        let want = world_fovy(size.x as f32 / size.y as f32) * zoom.0;
+        let base = cam_fov.as_deref().map_or(1.0, |f| f.0 / CAM_FOV);
+        let want = world_fovy(size.x as f32 / size.y as f32) * zoom.0 * base;
         // `&mut` marks the component changed even when the value is equal, so compare first.
         let Projection::Perspective(p) = proj.as_ref() else {
             continue;
@@ -398,6 +410,7 @@ pub(crate) fn plugin(app: &mut App) {
     // runs inside the world-frame driver; initialized here too for a harness with only this plugin.
     app.init_resource::<ViewDistance>()
         .init_resource::<FovZoom>()
+        .init_resource::<CamFov>()
         .add_systems(Update, stamp_world_fov)
         // After the frame's script calls, whose `nearclip` callback writes it.
         .add_systems(

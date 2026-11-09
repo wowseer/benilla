@@ -1233,7 +1233,7 @@ impl Plugin for CreatureAnimPlugin {
                 Update,
                 (
                     route_cast_visuals,
-                    arm_loot_fx,
+                    (arm_loot_fx, spell_visual::arm_treasure_sparkle).chain(),
                     arm_level_up_fx,
                     arm_mount_poof_fx,
                     arm_aura_state_fx,

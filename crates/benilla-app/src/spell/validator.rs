@@ -250,8 +250,12 @@ pub(super) fn cast_moving_refusal(
     use crate::creature_anim::move_flags;
     // `0x200f`: ANY_MOVE (0xf) | FALLING (0x2000), the wire layout.
     const MOVING_MASK: u32 = move_flags::ANY_MOVE | move_flags::FALLING;
+    // SuperWoW: a targeting-circle spell (`Targets & TARGET_FLAG_DEST_LOCATION`, Blizzard,
+    // Flamestrike) is not refused here, so its circle goes up while moving.
+    const TARGET_FLAG_DEST_LOCATION: u32 = 0x40;
     let Some(d) = spell else { return false };
-    d.interrupt_flags & crate::spell::SPELL_INTERRUPT_MOVEMENT != 0
+    d.targets & TARGET_FLAG_DEST_LOCATION == 0
+        && d.interrupt_flags & crate::spell::SPELL_INTERRUPT_MOVEMENT != 0
         && move_flags_word & MOVING_MASK != 0
         && !d.auto_repeat()
         && (cast_time_ms != 0

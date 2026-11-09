@@ -450,7 +450,13 @@ impl Loader<'_> {
         // `letters` through `SStrToInt` (`0x77a05c`), `blinkSpeed` through `SStrToFloat` and
         // stored as 0 unless above it (`0x77a07f`-`0x77a09f`).
         if let Some(v) = level.attr("letters").filter(|v| !v.is_empty()) {
-            self.call(wrapper, "SetMaxLetters", s_str_to_int(v), dbg);
+            let mut letters = s_str_to_int(v);
+            // SuperWoW raises the macro body's limit from 255 to 510, the stock macro editor's
+            // `letters="255"` with it.
+            if letters == 255 && level.attr("name") == Some("MacroFrameText") {
+                letters = crate::script::MAX_MACRO_BODY as i32;
+            }
+            self.call(wrapper, "SetMaxLetters", letters, dbg);
         }
         if let Some(v) = level.attr("blinkSpeed").filter(|v| !v.is_empty()) {
             let s = super::xml_float(v);

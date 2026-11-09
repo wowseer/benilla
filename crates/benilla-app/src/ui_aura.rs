@@ -637,6 +637,14 @@ fn shown_in_aura_ui(catalog: Option<&SpellCatalog>, spell_id: u32) -> bool {
         .is_none_or(|d| !d.hidden_from_aura_bar() && !d.tracking_aura())
 }
 
+/// SuperWoW's filter of the player's own bar: every aura but a tracking one, which the tracking
+/// slot shows.
+fn shown_on_own_bar(catalog: Option<&SpellCatalog>, spell_id: u32) -> bool {
+    catalog
+        .and_then(|c| c.get(spell_id))
+        .is_none_or(|d| d.hidden_from_aura_bar() || !d.tracking_aura())
+}
+
 /// The player's tracking aura, the reference's global `0xbc6378`: the rebuild's ascending walk
 /// overwrites it per tracking aura, so the last wins (`0x4e4302`), after the attribute test; a
 /// catalog miss cannot be told apart and goes to the bar. Read by `GetTrackingTexture`,
@@ -775,9 +783,11 @@ fn rebuild(
 ) -> Option<TrackingState> {
     let occupied: Vec<UnitAuraSlot> = store.0.unit_auras().collect();
     // Filtered before the cache, so a hidden aura takes no position (`0x4e42b6`-`0x4e4308`).
+    // SuperWoW: the player's bar shows every aura, a never-display one included; only a tracking
+    // aura still goes to the tracking slot.
     let live: Vec<UnitAuraSlot> = occupied
         .iter()
-        .filter(|a| shown_in_aura_ui(catalog, a.spell_id))
+        .filter(|a| shown_on_own_bar(catalog, a.spell_id))
         .copied()
         .collect();
     reconcile(cache, &live, now);

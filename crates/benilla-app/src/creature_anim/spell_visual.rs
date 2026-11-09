@@ -1662,6 +1662,46 @@ pub(super) fn arm_loot_fx(
     }
 }
 
+/// SuperWoW's `LootSparkle`: the loot sparkle on a treasure chest (`GAMEOBJECT_TYPE_CHEST`, 3)
+/// standing ready (`GAMEOBJECT_STATE` 1), hung as a corpse's is and taken when the chest is
+/// opened, the CVar is turned off, or the chest leaves.
+pub(super) fn arm_treasure_sparkle(
+    objects: Query<(Entity, &ObjectStore, &crate::net::NetEntity)>,
+    visuals: Option<Res<SpellVisuals>>,
+    superwow: Option<Res<crate::ui_superwow::SuperWowSwitches>>,
+    mut fx: MessageWriter<SpellKitFx>,
+    mut armed: Local<EntityHashSet>,
+) {
+    const GAMEOBJECT_TYPE_CHEST: i32 = 3;
+    const GO_STATE_READY: u32 = 1;
+    let Some(art) = visuals.as_ref().and_then(|v| v.0.loot_art_effect()) else {
+        return;
+    };
+    let on = superwow.as_deref().is_some_and(|s| s.on("LootSparkle"));
+    for (entity, store, net) in &objects {
+        if net.kind != EntityKind::GameObject {
+            continue;
+        }
+        let ready = on
+            && store.0.gameobject_type_id() == GAMEOBJECT_TYPE_CHEST
+            && store.0.gameobject_state() == Some(GO_STATE_READY);
+        if ready {
+            if armed.insert(entity) {
+                fx.write(sparkle(entity, art, FxStage::OneShot, None));
+            }
+        } else if armed.remove(&entity) {
+            fx.write(SpellKitFx::Reap {
+                entity,
+                spell_id: LOOT_FX_KEY,
+                class: FxClass::Hold,
+                force: true,
+                at: None,
+            });
+        }
+    }
+    armed.retain(|e| objects.contains(*e));
+}
+
 /// The loot sparkle's play: a unit's loops its first sequence (`0x600640`).
 fn sparkle(
     entity: Entity,

@@ -195,7 +195,7 @@ live_reads! {
         cast: Option<crate::ui_cast::CastLive<'static, 'static>>,
         /// SuperWoW's reads: the mark board, positions, the caster-form mana, `SpellInfo`, the
         /// motion state, weapon enchants, map boxes, the import files and the combat log line.
-        superwow: crate::superwow::SuperWowLive<'static, 'static>,
+        superwow: crate::ui_superwow::SuperWowLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

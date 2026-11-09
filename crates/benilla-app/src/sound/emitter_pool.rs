@@ -240,10 +240,16 @@ enum CapStep {
 /// channel. So a far ambience holds none of the four, but among audible ones a nearer fifth never
 /// takes over. A kit with `DistanceCutoff` 0 is never culled (`0x7a5cca`) and holds a slot at
 /// any distance.
+#[cfg(test)]
 const fn cap_step(entitled: bool, sounding_so_far: usize) -> CapStep {
+    cap_step_at(entitled, sounding_so_far, PLAYING_CAP)
+}
+
+/// [`cap_step`] at `cap` entries; SuperWoW's `UncapSounds` lifts it to the whole pool.
+const fn cap_step_at(entitled: bool, sounding_so_far: usize, cap: usize) -> CapStep {
     if !entitled {
         CapStep::Skip
-    } else if sounding_so_far >= PLAYING_CAP {
+    } else if sounding_so_far >= cap {
         CapStep::Retire
     } else {
         CapStep::Service
@@ -262,7 +268,13 @@ fn pump_emitters(
     config: Res<SoundConfig>,
     listener: Res<AudioListener>,
     mut commands: Commands,
+    superwow: Option<Res<crate::ui_superwow::SuperWowSwitches>>,
 ) {
+    let cap = if superwow.as_deref().is_some_and(|s| s.on("UncapSounds")) {
+        POOL_ENTRIES
+    } else {
+        PLAYING_CAP
+    };
     let (Some(mut kits), Some(assets)) = (kits, assets) else {
         return;
     };
@@ -311,7 +323,7 @@ fn pump_emitters(
     let mut census: Vec<(u32, bool)> = Vec::new();
     let mut withheld: Vec<u32> = Vec::new();
     for e in 0..POOL_ENTRIES {
-        match cap_step(pool.entries[e].entitled(), sounding) {
+        match cap_step_at(pool.entries[e].entitled(), sounding, cap) {
             CapStep::Skip => {
                 pool.retire(e);
                 continue;

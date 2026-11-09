@@ -1489,6 +1489,8 @@ fn deliver_after(
 pub(super) struct SpeakerEffects<'w> {
     bubbles: ResMut<'w, crate::chat_bubble::BubbleQueue>,
     gestures: Res<'w, crate::creature_anim::GestureQueue>,
+    /// SuperWoW's bubble kinds and range.
+    bubble_extras: Option<Res<'w, crate::chat_bubble::BubbleExtras>>,
 }
 
 /// `UNIT_FIELD_FLAGS` bit `0x20000000` (`PREVENT_ANIM`: Polymorph, Kidney Shot, Gouge, Sleep).
@@ -1969,7 +1971,13 @@ fn fire_one(
                 // The bubble gets the same text: the reference spawns it in this path
                 // (`0x49acd9`).
                 if let Some(kind) = event.kind {
-                    speaker.bubbles.push(&bubbles, msg.sender_guid, kind, &text);
+                    speaker.bubbles.push(
+                        &bubbles,
+                        speaker.bubble_extras.as_deref(),
+                        msg.sender_guid,
+                        kind,
+                        &text,
+                    );
                 }
             }
             Pending::Addon {
@@ -2198,15 +2206,25 @@ fn fire_one(
                     gameobjects,
                     items,
                 };
+                let store_of = |guid: u64| guids.0.get(&guid).and_then(|e| stores.get(*e).ok());
                 let ready = line.fill_names(
                     |guid| {
-                        super::combat::logged_name(
-                            guid,
-                            guids.0.get(&guid).and_then(|e| stores.get(*e).ok()),
-                            &sources,
-                            ask,
-                            script,
-                        )
+                        let store = store_of(guid);
+                        let name = super::combat::logged_name(guid, store, &sources, ask, script);
+                        // SuperWoW: an owned unit, a pet, guardian or totem, is named with its
+                        // owner, `Name (Owner)`.
+                        let owner = store.filter(|s| s.is_unit()).and_then(|s| {
+                            s.0.unit_charmed_by()
+                                .or_else(|| s.0.unit_summoned_by())
+                                .or_else(|| s.0.unit_created_by())
+                        });
+                        match owner.filter(|&o| o != guid) {
+                            Some(o) => format!(
+                                "{name} ({})",
+                                super::combat::logged_name(o, store_of(o), &sources, ask, script)
+                            ),
+                            None => name,
+                        }
                     },
                     |entry| match items.template(entry, 0, Ask::Read).map(|t| t.name.clone()) {
                         Some(name) => super::combat::ItemName::Named(name),

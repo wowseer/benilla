@@ -40,6 +40,25 @@ struct RingKey {
 #[derive(Resource)]
 pub(super) struct RingAssets {
     texture: Handle<Image>,
+    /// SuperWoW's styles 2 (full circle) and 3 (pointed circle), from its patch's textures on the
+    /// player's chain; a chain without them draws the classic ring.
+    superwow: [Handle<Image>; 2],
+}
+
+/// SuperWoW's `SelectionCircleStyle` textures (its DLL's `Textures\UnitSelectTextur1.blp` and
+/// `...Textur2.blp`), for styles 2 and 3.
+const SUPERWOW_RING_TEXTURES: [&str; 2] = [
+    "mpq://textures/unitselecttextur1.blp",
+    "mpq://textures/unitselecttextur2.blp",
+];
+
+/// SuperWoW's `SelectionCircleStyle`: 1 (and 0) the classic ring turned by the camera, 2 the full
+/// circle, 3 the pointed circle, 4 the classic ring turned by the unit's facing.
+fn ring_style(switches: Option<&crate::ui_superwow::SuperWowSwitches>) -> u8 {
+    switches
+        .and_then(|s| s.cvar("SelectionCircleStyle").trim().parse().ok())
+        .filter(|s| (1..=4).contains(s))
+        .unwrap_or(1)
 }
 
 /// The reference's selection-circle texture, loaded at `0x6146d0`: a white ring, tinted per vertex.
@@ -208,7 +227,8 @@ pub(crate) fn selection_variant(
 /// Load the ring texture and seed the ring record.
 pub(super) fn setup_ring(mut commands: Commands, asset_server: Res<AssetServer>) {
     let texture = asset_server.load::<Image>(RING_TEXTURE);
-    commands.insert_resource(RingAssets { texture });
+    let superwow = SUPERWOW_RING_TEXTURES.map(|t| asset_server.load::<Image>(t));
+    commands.insert_resource(RingAssets { texture, superwow });
     commands.init_resource::<RingState>();
 }
 
@@ -260,7 +280,9 @@ pub(super) fn update_ring(
         // The party roster: the selector's party table `0xbc6f48`.
         Res<crate::ui_party::GroupState>,
     ),
+    superwow: Option<Res<crate::ui_superwow::SuperWowSwitches>>,
 ) {
+    let style = ring_style(superwow.as_deref());
     let state = &mut *state;
     let hide = match selection.target {
         None => {
@@ -277,7 +299,13 @@ pub(super) fn update_ring(
                     None => (sel_radius.map_or(RING_FALLBACK_RADIUS, |r| r.0), 1.0),
                 };
                 let radius = local * (unit.scale.x * mount_scale).max(0.01);
-                *fade_angle = ring_fade_angle(&camera).unwrap_or(*fade_angle);
+                *fade_angle = if style == 1 {
+                    ring_fade_angle(&camera).unwrap_or(*fade_angle)
+                } else {
+                    // SuperWoW's styles 2-4 turn with the unit's facing, its bright side ahead.
+                    let fwd = unit.rotation * Vec3::NEG_Z;
+                    -std::f32::consts::FRAC_PI_2 - fwd.z.atan2(fwd.x)
+                };
                 let key = RingKey {
                     feet: unit.translation,
                     radius,
@@ -398,6 +426,10 @@ pub(super) fn push_ring(
     shadows: Option<Res<crate::blob_shadow::ShadowSettings>>,
     cam: Query<Entity, With<WorldCamera>>,
     mut draw: benilla_world::particles::buffer::WorldEffectDraw,
+    (superwow, images): (
+        Option<Res<crate::ui_superwow::SuperWowSwitches>>,
+        Res<Assets<Image>>,
+    ),
 ) {
     let (Some(assets), Some(state)) = (assets, state) else {
         return;
@@ -407,8 +439,20 @@ pub(super) fn push_ring(
         return;
     }
     let tint = state.color.to_linear();
+    // SuperWoW's styles 2 and 3 take their own texture where the chain holds it.
+    let texture = match ring_style(superwow.as_deref()) {
+        s @ (2 | 3) => {
+            let h = &assets.superwow[usize::from(s - 2)];
+            if images.contains(h) {
+                h.id()
+            } else {
+                assets.texture.id()
+            }
+        }
+        _ => assets.texture.id(),
+    };
     let mut batch = draw
-        .batch(cam, assets.texture.id())
+        .batch(cam, texture)
         .additive()
         .anchored(state.key.feet)
         // The ring goes through the same decal draw as the blob shadow (`0x608f28` → `0x6d7480`),

@@ -374,7 +374,7 @@ fn emit_minimap(
         unit_pos,
         (window, widescreen),
         mut blip_hover,
-        group,
+        (group, superwow),
         tracked,
         self_store,
         names,
@@ -722,6 +722,24 @@ fn emit_minimap(
             blips::emit_party_dots(
                 ctx, &group, &guids, &unit_pos, pet, icons, &mut quads, &mut hover,
             );
+            // SuperWoW's tracked units, beside the party's.
+            if let Some(sw) = superwow.as_deref().filter(|s| !s.tracked.is_empty()) {
+                let skip: Vec<u64> = blips::group_records(&group, &guids, &unit_pos, pet)
+                    .into_iter()
+                    .flatten()
+                    .map(|(g, _)| g)
+                    .collect();
+                blips::emit_superwow_tracked_dots(
+                    ctx,
+                    &sw.tracked,
+                    &skip,
+                    &guids,
+                    &unit_pos,
+                    icons,
+                    &mut quads,
+                    &mut hover,
+                );
+            }
         }
     }
     *blip_hover = hover;

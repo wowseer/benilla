@@ -63,6 +63,17 @@ pub(crate) fn melee_outcome(s: &AttackerState) -> Option<(Family, LineWord)> {
         return Some((VSBLOCK, LineWord::bare("BLOCK")));
     }
     if s.damage == 0 {
+        // SuperWoW: a swing absorbed whole is the hit it was, for 0 with its absorbed trailer,
+        // not 1.12's "absorbs all the damage" line.
+        if s.hit_info & ABSORB != 0 && s.absorb != 0 && s.victim_state == 1 {
+            let family = match (s.hit_info & CRIT != 0, s.school != 0) {
+                (false, false) => COMBATHIT,
+                (true, false) => COMBATHITCRIT,
+                (false, true) => COMBATHITSCHOOL,
+                (true, true) => COMBATHITCRITSCHOOL,
+            };
+            return Some((family, LineWord::pair("ABSORB", 0, s.absorb)));
+        }
         if s.hit_info & ABSORB != 0 {
             return Some((VSABSORB, LineWord::bare("ABSORB")));
         }

@@ -27,12 +27,25 @@ use crate::query_cache::Ask;
 /// so the queue cannot grow unbounded. Left at the frame: no script reads what a play does.
 fn drain_ui_sounds(
     // With the volumes, a CVar knob the call host's callbacks write; the drain runs no Lua.
-    mut vm: crate::script_calls::VmWith<Res<'static, SoundConfig>>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, SoundConfig>,
+        Option<Res<'static, crate::ui_superwow::SuperWowSwitches>>,
+    )>,
     kits: Option<ResMut<SoundKits>>,
     assets: Option<Res<WorldAssets>>,
     mut out: NonSendMut<SoundOutput>,
 ) {
-    vm.turn(|script, config| {
+    vm.turn(|script, (config, superwow)| {
+        // SuperWoW's `InterfaceVolume`, 0 to 1, scales the interface's own plays on the SFX
+        // slider.
+        let ui_volume = superwow
+            .as_deref()
+            .and_then(|s| s.number("InterfaceVolume"))
+            .filter(|v| v.is_finite())
+            .map_or(1.0, |v| v.clamp(0.0, 1.0));
+        let mut scaled = SoundConfig::clone(&*config);
+        scaled.sfx *= ui_volume;
+        let config = &scaled;
         let Some(script) = script else {
             return;
         };
@@ -56,7 +69,7 @@ fn drain_ui_sounds(
                         &mut kits,
                         &assets,
                         &mut out,
-                        &config,
+                        config,
                         path,
                         kit::SoundCategory::Sfx,
                     ) {
@@ -70,7 +83,7 @@ fn drain_ui_sounds(
                 &mut kits,
                 &assets,
                 &mut out,
-                &config,
+                config,
                 Vec3::ZERO,
                 kit_ref,
                 None,

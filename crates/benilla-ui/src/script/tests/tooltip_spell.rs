@@ -2064,7 +2064,7 @@ impl crate::script::CallHost for CastUiHost {
 /// An `enchant:` link takes a spell whose record's `castUI` is 3 (`0x53222e`..`0x532247`); a
 /// plain spell or an id with no record raises `Unknown link type` (`0x532269`).
 #[test]
-fn an_enchant_link_takes_only_a_craft_spell() {
+fn an_enchant_link_takes_any_spell_the_catalog_holds() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.set_spell_tooltip(
@@ -2090,12 +2090,13 @@ fn an_enchant_link_takes_only_a_craft_spell() {
         let err = |s: &mut UiScript, call| s.run(call).unwrap_err().to_string();
         (
             craft,
-            err(s, r#"REF:SetHyperlink("enchant:133")"#),
+            s.run(r#"REF:SetHyperlink("enchant:133")"#).is_ok(),
             err(s, r#"REF:SetHyperlink("Enchant:99999")"#),
         )
     });
     assert_eq!(craft, "Enchant Weapon - Crusader");
-    assert!(plain.contains("Unknown link type"), "{plain}");
+    // SuperWoW links every spell as `enchant:`, so a spell with any `castUI` shows.
+    assert!(plain, "a non-craft spell's enchant link shows");
     assert!(none.contains("Unknown link type"), "{none}");
 }
 

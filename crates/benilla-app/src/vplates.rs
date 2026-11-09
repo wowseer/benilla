@@ -362,6 +362,8 @@ struct PlateWorld<'w, 's> {
     mode: Res<'w, VPlateMode>,
     /// The spatial verdicts this gate leaves for the packets'.
     spots: ResMut<'w, PlateSpots>,
+    /// SuperWoW's `NameplateRange` and `NameplateMotion`.
+    superwow: Option<Res<'w, crate::ui_superwow::SuperWowSwitches>>,
 }
 
 /// Every frame, the units' gate (`0x60f600` from each unit's update, `0x607ef9`), the seat pass
@@ -497,6 +499,23 @@ fn drive_vplates(
         let sort_pt = Vec2::new(0.4 * diag, viewport.y - 0.3 * diag);
         let mut cands = Vec::new();
         let mut spots = std::collections::HashSet::new();
+        // SuperWoW's `NameplateRange`, 10 to 80 yards, over 1.12's 20 (`[0xc4d988]`).
+        let max_dist_sq = world
+            .superwow
+            .as_deref()
+            .and_then(|s| s.number("NameplateRange"))
+            .filter(|v| v.is_finite())
+            .map_or(MAX_DIST_SQ, |yd| {
+                let yd = yd.clamp(10.0, 80.0);
+                yd * yd
+            });
+        // SuperWoW's `NameplateMotion`: 0 lets plates overlap where they project; any other value
+        // keeps 1.12's spread off the plates already seated. Its smart and compact modes are not
+        // built and spread as 1.12 does.
+        let spread = world
+            .superwow
+            .as_deref()
+            .is_none_or(|s| s.cvar("NameplateMotion") != "0");
         for (entity, net, guid, tf, store) in &world.units {
             // The camera's own unit (`0x60f68c`); our body is a candidate while we are attached to
             // another unit.
@@ -509,7 +528,7 @@ fn drive_vplates(
                 continue;
             }
             // Measured from the camera's unit (`0x60f780`-`0x60f7b8`).
-            if (tf.translation - centre_pos).length_squared() > MAX_DIST_SQ {
+            if (tf.translation - centre_pos).length_squared() > max_dist_sq {
                 continue;
             }
             // Behind the camera or outside the viewport there is no plate: `0x60f600` destroys it
@@ -572,7 +591,11 @@ fn drive_vplates(
                 screen.x + pw * 0.5,
                 screen.y + ph,
             );
-            let solved = bucket.resolve(desired, viewport);
+            let solved = if spread {
+                bucket.resolve(desired, viewport)
+            } else {
+                desired
+            };
             // Snap the left edge, not the centre, which an odd width would put between texels; the
             // claim takes the snapped rect, so later plates dodge what is drawn.
             let top = device_snap(solved.min.y, scale);

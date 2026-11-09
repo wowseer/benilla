@@ -539,6 +539,11 @@ pub(super) fn filled_through_a_read(n: &str) -> Option<Fill> {
 /// check here unseen. Each is named by its full path, the crate's own by its path in the crate,
 /// and matched whole ([`names_exactly`]).
 pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // SuperWoW's switches, which the frame's sync copies from the VM ahead of the handlers.
+    "::ui_superwow::SuperWowSwitches",
+    // The cursor's world hit, which the hover trace writes each frame and the `"CLICK"` cast
+    // reads.
+    "::target::PickOcclusion",
     // `AreaPOI.dbc`, the landmark rows the gossip marker's re-select of the map reads
     // (`0x6dac93` → `0x4a67a0`, its walk at `0x4a6819`).
     "::area_poi::AreaPoiRes",

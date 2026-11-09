@@ -109,6 +109,30 @@ pub(super) fn spell_damage_log(
     }
 }
 
+/// SuperWoW's floating heal: my heal's or my pet's number, green, over its target as the damage
+/// number floats; a crit on the crit row. 1.12 floats no heal.
+pub(super) fn spell_heal_log(
+    s: benilla_protocol::messages::SpellHealLog,
+    index: &GuidIndex,
+    self_guid: &SelfGuid,
+    stores: &Query<&mut ObjectStore>,
+    text: &mut MessageWriter<CombatTextSpawn>,
+) {
+    const COLOR_HEAL_GREEN: u32 = 0xFF00_FF00;
+    if s.amount == 0 || classify_source(s.healer, index, self_guid, stores).is_none() {
+        return;
+    }
+    let Some(anchor) = gated_anchor(s.target, index, self_guid, stores) else {
+        return;
+    };
+    text.write(CombatTextSpawn {
+        anchor,
+        text: TextBody::Literal(s.amount.to_string()),
+        category: if s.critical { 2 } else { 0 },
+        color: Some(COLOR_HEAL_GREEN),
+    });
+}
+
 /// `SMSG_PERIODICAURALOG` (`0x626dd0`): per damage tick of a spell with a record and no
 /// `Attributes & 0x100` (`0x626f1b`), the number floats like direct damage, never as a crit. Heal,
 /// energize and leech ticks float nothing, as heals never float in the 1.12 client.

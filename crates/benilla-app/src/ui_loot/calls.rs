@@ -31,9 +31,11 @@ pub(crate) struct OpenItem {
 
 /// The byte an interaction passes `SetAutoLoot`: whether Shift is down (`EventIsKeyDown(0)`,
 /// `0x492879`, `0x5edca7`), inverted by `autoLootDefault` ([`LootConfig::auto_loot`]), which is
-/// not a 1.12 CVar and off by default, leaving Shift alone.
+/// not a 1.12 CVar and off by default, leaving Shift alone. Once an addon has called SuperWoW's
+/// `SetAutoloot` ([`LootConfig::superwow_owned`]) the switch alone decides, as SuperWoW removes
+/// the gesture.
 pub(crate) fn interaction_byte(cfg: &LootConfig, shift: bool) -> bool {
-    cfg.auto_loot != shift
+    cfg.auto_loot != (shift && !cfg.superwow_owned)
 }
 
 /// What a loot function does after its signal's listeners have returned.

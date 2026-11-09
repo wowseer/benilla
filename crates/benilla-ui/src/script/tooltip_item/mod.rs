@@ -474,9 +474,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // record's `castUI` is 3 (`0x532225`..`0x532247`), to the spell builder (`0x532259`).
             // With no host to read the record, the id alone decides.
             let spell = binding_abi::s_str_to_int(tail);
+            // SuperWoW links every spell as `enchant:<id>`, so any spell the catalog holds shows,
+            // not only a craft's (`castUI` 3); an id with no record is still unknown.
             let craft = spell > 0
                 && super::live::ask(lua, &SpellCastUiQuery(spell as u32))
-                    .is_none_or(|cast_ui| cast_ui == Some(3));
+                    .is_none_or(|cast_ui| cast_ui.is_some());
             if !craft {
                 return Err(unknown());
             }

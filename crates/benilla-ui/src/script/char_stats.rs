@@ -618,9 +618,10 @@ pub(super) fn inventory_reader(lua: &Lua, model: &Model, token: &str) -> Option<
     if guid == model.unit_guids.player {
         return active_player_held(lua).then_some(InvReader::Own);
     }
+    // SuperWoW removes the inspect range from a friendly player's worn items: any player we can
+    // cooperate with is read, at any distance; `CanInspect` keeps its range.
     let reach = super::inspect::reach_of(lua, model, guid)?;
-    (reach.inspectable && super::inspect::in_inspect_range(&reach))
-        .then_some(InvReader::Visible(guid))
+    reach.inspectable.then_some(InvReader::Visible(guid))
 }
 
 /// Whether an active player is held now (`0x4944af` → `0x468460`): through the lent host, the
@@ -2370,7 +2371,12 @@ mod tests {
         assert_eq!(texture(&s, "target").as_deref(), Some("Visible2"));
         assert_eq!(texture(&s, "PARTY1").as_deref(), Some("Visible2"));
         assert_eq!(texture(&s, "player").as_deref(), Some("Own"));
-        assert_eq!(texture(&s, "party2"), None, "20 yards off");
+        // SuperWoW reads a friendly player's worn items at any distance.
+        assert_eq!(
+            texture(&s, "party2").as_deref(),
+            Some("Visible3"),
+            "20 yards off, still read"
+        );
         assert_eq!(
             s.eval::<Option<String>>(r#"return GetInventoryItemLink("target", 1)"#)
                 .unwrap(),

@@ -398,7 +398,9 @@ fn a_line_whose_item_answers_later_in_the_frame_fires_at_the_answer() {
         frame(&mut app, vec![p1(), p4(), linen_named()]),
         [
             "CHAT_MSG_WHISPER:hi",
-            "CHAT_MSG_SPELL_TRADESKILLS:You create Linen Cloth."
+            "CHAT_MSG_SPELL_TRADESKILLS:You create Linen Cloth.",
+            // SuperWoW's raw twin of the combat line, right behind it.
+            "RAW_COMBATLOG",
         ]
     );
 }

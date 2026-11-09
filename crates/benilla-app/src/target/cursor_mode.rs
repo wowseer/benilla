@@ -880,7 +880,7 @@ pub(super) fn classify(
                 let can_loot_now = held.is_none() && (can_auto_interact || in_melee);
                 let looting_this = held.is_some() && held == hovered.guid;
                 return Some((
-                    loot_cursor(loot_cfg.auto_loot, shift),
+                    loot_cursor(loot_cfg.auto_loot, shift && !loot_cfg.superwow_owned),
                     !(can_loot_now || looting_this),
                 ));
             }
@@ -927,7 +927,8 @@ pub(super) fn classify(
             looting_this: loot_latch.0.is_some() && loot_latch.0 == hovered.corpse_guid,
             can_auto_interact,
             auto_loot: loot_cfg.auto_loot,
-            shift_held: shift,
+            // SuperWoW's owned switch ignores Shift ([`crate::ui_loot::interaction_byte`]).
+            shift_held: shift && !loot_cfg.superwow_owned,
         })
     };
     let resolved = if go_is_nearest(hovered, hovered_object) {

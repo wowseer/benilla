@@ -34,7 +34,9 @@
 
 mod dots;
 
-pub(super) use dots::{emit_party_dots, emit_quest_dots, emit_tracking_dots, SelfTracking};
+pub(super) use dots::{
+    emit_party_dots, emit_quest_dots, emit_superwow_tracked_dots, emit_tracking_dots, SelfTracking,
+};
 
 use bevy::math::Rect;
 use bevy::prelude::*;
@@ -193,7 +195,11 @@ pub(super) type BlipInputs<'w, 's> = (
         Option<Res<'w, crate::video::Widescreen>>,
     ),
     ResMut<'w, MinimapBlipHover>,
-    Res<'w, crate::ui_party::GroupState>,
+    // The group, and SuperWoW's `TrackUnit` set.
+    (
+        Res<'w, crate::ui_party::GroupState>,
+        Option<Res<'w, crate::ui_superwow::SuperWowSwitches>>,
+    ),
     TrackedCandidates<'w, 's>,
     Query<'w, 's, (&'static ObjectStore, &'static Guid), With<SelfPlayer>>,
     Res<'w, NameCache>,

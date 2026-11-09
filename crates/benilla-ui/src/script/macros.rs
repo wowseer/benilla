@@ -33,9 +33,9 @@ pub const MAX_MACROS: usize = 18;
 /// (`MacroPopupEditBox`, `letters="16"`); the verbs do not.
 pub const MAX_MACRO_NAME: usize = 0x3f;
 
-/// The characters a body keeps: `0x4f1550` cuts after 256 (`cmp edi,0x100`, `0x4f1580`). The stock
-/// edit box stops at 255 on its own (`MacroFrameText`, `letters="255"`).
-pub const MAX_MACRO_BODY: usize = 0x100;
+/// The characters a body keeps: `0x4f1550` cuts after 256 (`cmp edi,0x100`, `0x4f1580`); SuperWoW
+/// raises it to 510, and the stock edit box's `letters="255"` (`MacroFrameText`) with it.
+pub const MAX_MACRO_BODY: usize = 510;
 
 /// The bytes a body passes through first: `0x4f1550` copies it with `SStrCopy` size 0x400
 /// (`0x4f1556`) before it counts characters.
@@ -1183,7 +1183,7 @@ mod tests {
         s.run(&format!(
             r#"CreateMacro("{}", 1, "{}")"#,
             "N".repeat(100),
-            "b".repeat(400)
+            "b".repeat(800)
         ))
         .unwrap();
         let (name, body) = s

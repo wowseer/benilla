@@ -145,6 +145,8 @@ pub(super) struct TargetHoverState<'w, 's> {
     self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     /// The unit and player filter while a word stands (`0x480610`).
     units: crate::spell::targeting::PickChecks<'w, 's>,
+    /// SuperWoW's switches: `Clickthrough(1)` passes over dead creatures with no loot.
+    superwow: Option<Res<'w, crate::ui_superwow::SuperWowSwitches>>,
 }
 
 impl TargetHoverState<'_, '_> {
@@ -174,7 +176,14 @@ impl TargetHoverState<'_, '_> {
     ) -> bool {
         match kind {
             EntityKind::Unit | EntityKind::Player => {
-                !self.excludes(is_self, store) && self.units.admits_unit(entity, store)
+                // SuperWoW's click-through: a dead creature with no loot is not picked, so the
+                // click reaches the lootable one under it.
+                let clicked_through = kind == EntityKind::Unit
+                    && self.superwow.as_deref().is_some_and(|s| s.clickthrough)
+                    && store.is_some_and(|s| s.0.unit_is_dead() && !s.0.unit_lootable());
+                !clicked_through
+                    && !self.excludes(is_self, store)
+                    && self.units.admits_unit(entity, store)
             }
             EntityKind::Corpse => {
                 let Some(word) = self.corpse_pick.0 else {

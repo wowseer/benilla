@@ -318,6 +318,46 @@ pub(in crate::minimap) fn emit_party_dots(
     }
 }
 
+/// SuperWoW's `TrackUnit` units: the party dot, blue cell 4 at 1.3×, for each tracked unit the
+/// client holds within 0.8 of the radius and not already a party record.
+pub(in crate::minimap) fn emit_superwow_tracked_dots(
+    ctx: &BlipCtx,
+    tracked: &std::collections::BTreeSet<u64>,
+    skip: &[u64],
+    guids: &GuidIndex,
+    unit_pos: &Query<&GlobalTransform, With<NetEntity>>,
+    icons: &Handle<Image>,
+    quads: &mut UiQuads,
+    hover: &mut MinimapBlipHover,
+) {
+    for &guid in tracked.iter().filter(|g| !skip.contains(g)) {
+        let Some(tf) = guids.0.get(&guid).and_then(|&e| unit_pos.get(e).ok()) else {
+            continue;
+        };
+        let w = bevy_to_wow(tf.translation());
+        let (x, y) = (w[0], w[1]);
+        let d = ((x - ctx.wx).powi(2) + (y - ctx.wy).powi(2)).sqrt();
+        if d / ctx.radius_yd > super::BLIP_EDGE_RATIO {
+            continue;
+        }
+        let rect = Rect::from_center_size(
+            ctx.center + ctx.offset([x, y, 0.0]),
+            Vec2::splat(ctx.side * (PARTY_DOT_PX / BLIP_BASIS_PX)),
+        );
+        quads.overlays.push(UiQuad {
+            rect,
+            z_key: ctx.z,
+            texture: Some(icons.clone()),
+            uv: UvRect::from_tex_coords(PARTY_DOT_CELL),
+            color: [1.0, 1.0, 1.0, ctx.alpha],
+            ..default()
+        });
+        if ctx.cursor.is_some_and(|c| rect.contains(c)) {
+            hover.push(BlipBlock::Dot(4), BlipName::Unit(guid), false);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

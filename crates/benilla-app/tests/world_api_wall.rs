@@ -170,6 +170,8 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("thread_qos::QosClass", "record"),
     ("thread_qos::ThreadQosPlugin", "wall"),
     ("thread_qos::promote_current_thread", "record"),
+    // SuperWoW's `FoV`: the app sets `[cam+0x40]`, the world derives the projection from it.
+    ("view::CamFov", "record"),
     ("view::MsaaFormats", "record"),
     ("view::MsaaSetting", "record"),
     ("view::ViewDistance", "record"),

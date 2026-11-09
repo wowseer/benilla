@@ -75,12 +75,47 @@ const WRAP_W: f32 = 0.2;
 /// bubble stores by `S` for its insets, edge size and tile size (`0x4b09d2`-`0x4b0a2f`).
 const BORDER_UNITS: f32 = 16.0;
 
+/// SuperWoW's bubble CVars: `ChatBubblesRaid`, `ChatBubblesBattleground`, `ChatBubblesWhisper`
+/// add their kinds, `ChatBubblesCreatures` gates the monster lines, and `ChatBubbleRange` (10 to
+/// 200 yd) replaces the 20 yd gate. The default is 1.12's set and range.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BubbleExtras {
+    pub(crate) raid: bool,
+    pub(crate) battleground: bool,
+    pub(crate) whisper: bool,
+    pub(crate) creatures: bool,
+    pub(crate) range_sq: f32,
+}
+
+impl Default for BubbleExtras {
+    fn default() -> Self {
+        Self {
+            raid: false,
+            battleground: false,
+            whisper: false,
+            creatures: true,
+            range_sq: MAX_DIST_SQ,
+        }
+    }
+}
+
 /// The CVar gating this kind's bubble (`0x608b0d`); `None` for a kind that does not bubble.
+#[cfg(test)]
 fn bubble_cvar(kind: ChatEventKind, cfg: &BubbleConfig) -> Option<bool> {
+    bubble_cvar_with(kind, cfg, &BubbleExtras::default())
+}
+
+/// [`bubble_cvar`] with SuperWoW's kinds and its creature switch.
+fn bubble_cvar_with(kind: ChatEventKind, cfg: &BubbleConfig, x: &BubbleExtras) -> Option<bool> {
     use ChatEventKind as K;
     match kind {
         K::Party => Some(cfg.party),
-        K::Say | K::Yell | K::MonsterSay | K::MonsterYell => Some(cfg.all),
+        K::Say | K::Yell => Some(cfg.all),
+        K::MonsterSay | K::MonsterYell => Some(cfg.all && x.creatures),
+        K::Raid | K::RaidLeader if x.raid => Some(true),
+        K::Battleground | K::BattlegroundLeader if x.battleground => Some(true),
+        K::Whisper if x.whisper => Some(true),
+        K::MonsterWhisper if x.whisper => Some(x.creatures),
         _ => None,
     }
 }
@@ -171,10 +206,13 @@ impl BubbleQueue {
     pub(crate) fn push(
         &mut self,
         cfg: &BubbleConfig,
+        extras: Option<&BubbleExtras>,
         sender_guid: u64,
         kind: ChatEventKind,
         text: &str,
     ) {
+        let x = extras.copied().unwrap_or_default();
+        let bubble_cvar = |kind, cfg| bubble_cvar_with(kind, cfg, &x);
         if sender_guid == 0 || !bubble_cvar(kind, cfg).unwrap_or(false) {
             if benilla_assets::trace::enabled_for("bub") {
                 let why = match (sender_guid, bubble_cvar(kind, cfg)) {
@@ -409,7 +447,9 @@ fn drive_bubbles(
     mut feed: ResMut<BubbleFeed>,
     // Whether the last render drew each speaker (`0x6704c0`, read at `0x4b0cab`).
     drawn: crate::entities::SceneDrawn,
+    extras: Option<Res<BubbleExtras>>,
 ) {
+    let max_dist_sq = extras.as_deref().map_or(MAX_DIST_SQ, |x| x.range_sq);
     active.0.clear();
     feed.states.clear();
     feed.geometry = None;
@@ -446,7 +486,7 @@ fn drive_bubbles(
             continue;
         };
         let d2 = (tf.translation - self_tf.translation).length_squared();
-        if d2 > MAX_DIST_SQ {
+        if d2 > max_dist_sq {
             refuse(&format!("out-of-range dist={:.1}yd", d2.sqrt()), guid);
             continue;
         }
@@ -487,7 +527,7 @@ fn drive_bubbles(
             return false;
         };
         let in_range =
-            drawn.unit(entity) && (tf.translation - s.translation).length_squared() < MAX_DIST_SQ;
+            drawn.unit(entity) && (tf.translation - s.translation).length_squared() < max_dist_sq;
         b.fade.tick(now, in_range, b.born, b.duration)
     });
 
@@ -833,6 +873,7 @@ mod tests {
         let cfg = BubbleConfig::default();
         app.world_mut().resource_mut::<BubbleQueue>().push(
             &cfg,
+            None,
             7,
             ChatEventKind::Say,
             "one two three four five six seven eight",

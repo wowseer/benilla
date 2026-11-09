@@ -172,31 +172,32 @@ fn a_delete_clears_each_slot_that_holds_the_macro_and_no_other() {
 }
 
 /// `SStrCopy` into the record's 0x40-byte name (`0x4f11fc`, `0x4f12e1`) keeps 63 bytes and does not
-/// trim; the body keeps 256 characters (`0x4f1580`). The stock edit boxes stop shorter on their own.
+/// trim; the body keeps 510 characters, SuperWoW's cap over 1.12's 256 (`0x4f1580`). The stock
+/// edit boxes stop shorter on their own.
 #[test]
-fn the_verbs_keep_a_63_byte_name_and_a_256_character_body() {
+fn the_verbs_keep_a_63_byte_name_and_a_510_character_body() {
     let s = script();
     s.run(&format!(
         r#"CreateMacro("{}", 1, "{}")"#,
         "N".repeat(100),
-        "b".repeat(300)
+        "b".repeat(600)
     ))
     .unwrap();
     let (name, body) = s
         .eval::<(String, String)>("local n, _, b = GetMacroInfo(1) return n, b")
         .unwrap();
-    assert_eq!((name.len(), body.len()), (63, 256));
+    assert_eq!((name.len(), body.len()), (63, 510));
 
     s.run(&format!(
         r#"EditMacro(1, "{}", nil, "{}")"#,
         "M".repeat(70),
-        "c".repeat(257)
+        "c".repeat(511)
     ))
     .unwrap();
     let (name, body) = s
         .eval::<(String, String)>("local n, _, b = GetMacroInfo(1) return n, b")
         .unwrap();
-    assert_eq!((name.len(), body.len()), (63, 256));
+    assert_eq!((name.len(), body.len()), (63, 510));
 
     // A cut inside a character stops at its boundary: 62 of the 63 bytes of 40 two-byte characters
     // (the deviation of `cut_name`).
@@ -233,8 +234,9 @@ fn a_body_is_cut_to_1023_bytes_before_it_is_counted() {
         kept
     };
     let emoji = "\u{1F600}";
+    // 1022 bytes fit the copy and stay under the 510-character cap whole.
     let fits = kept(format!("{}ab", emoji.repeat(255)));
-    assert_eq!(fits, format!("{}a", emoji.repeat(255)));
+    assert_eq!(fits, format!("{}ab", emoji.repeat(255)));
     assert_eq!(kept(emoji.repeat(300)), emoji.repeat(255));
 }
 

@@ -44,10 +44,10 @@ pub(crate) struct SuperWowLive<'w, 's> {
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     maps: Option<Res<'w, crate::ui_world_map::WorldMapUiData>>,
     logs: Option<Res<'w, crate::ui_chat::logging::ChatLogFiles>>,
-    /// The indoor bit: the WMO group under the player, as the zone resolver reads it.
-    interior: Option<Res<'w, benilla_world::wmo_portal::CurrentAreaInterior>>,
     /// This frame's world hit along the cursor ray.
     cursor: Option<Res<'w, crate::target::PickOcclusion>>,
+    /// The indoor bit as the frame's sync copied it.
+    switches: Option<Res<'w, SuperWowSwitches>>,
 }
 
 impl SuperWowLive<'_, '_> {
@@ -111,7 +111,7 @@ impl SuperWowLive<'_, '_> {
         Some(PlayerMotion {
             swimming: player.swimming,
             mounted,
-            indoors: self.interior.as_deref().is_some_and(|i| i.0.is_some()),
+            indoors: self.switches.as_deref().is_some_and(|s| s.indoors),
             run_speed: speeds.map_or(0.0, |s| s.run),
             swim_speed: speeds.map_or(0.0, |s| s.swim),
         })
@@ -327,6 +327,137 @@ fn fire_cast_event(ev: &SessionEvent, world: &mut World) {
     });
 }
 
+/// SuperWoW's switches as the VM last held them, for the engine's systems that read them: the
+/// world pick's click-through and the minimap's tracked units.
+#[derive(Resource, Default, Clone, Debug, PartialEq)]
+pub(crate) struct SuperWowSwitches {
+    pub(crate) clickthrough: bool,
+    pub(crate) tracked: std::collections::BTreeSet<u64>,
+    /// SuperWoW's CVars ([`benilla_ui::script::superwow::CVARS`]) as the VM holds them, by name.
+    pub(crate) cvars: std::collections::BTreeMap<&'static str, String>,
+    /// `IsIndoors`: the zone resolver's indoor bit, the interior group under the player.
+    pub(crate) indoors: bool,
+    /// An addon called `SetAutoloot`.
+    pub(crate) autoloot_owned: bool,
+}
+
+impl SuperWowSwitches {
+    /// A SuperWoW CVar's value, its default before the VM is read.
+    pub(crate) fn cvar(&self, name: &str) -> &str {
+        self.cvars.get(name).map(String::as_str).unwrap_or_else(|| {
+            benilla_ui::script::superwow::CVARS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map_or("", |(_, d)| d)
+        })
+    }
+
+    /// A 0/1 CVar: on unless `"0"` or empty.
+    pub(crate) fn on(&self, name: &str) -> bool {
+        let v = self.cvar(name);
+        !v.is_empty() && v != "0"
+    }
+
+    /// A numeric CVar, `None` for text that is no number.
+    pub(crate) fn number(&self, name: &str) -> Option<f32> {
+        self.cvar(name).trim().parse().ok()
+    }
+}
+
+/// Copy the VM's switches into [`SuperWowSwitches`] each frame, written only on a change.
+fn sync_switches(
+    script: Option<NonSend<benilla_ui::script::UiScript>>,
+    mut switches: ResMut<SuperWowSwitches>,
+) {
+    let Some(script) = script else {
+        return;
+    };
+    let state = script.superwow_state();
+    let cvars = benilla_ui::script::superwow::CVARS
+        .iter()
+        .map(|&(name, default)| {
+            (
+                name,
+                script.cvar(name).unwrap_or_else(|| default.to_string()),
+            )
+        })
+        .collect();
+    let next = SuperWowSwitches {
+        clickthrough: state.clickthrough,
+        tracked: state.tracked,
+        cvars,
+        indoors: switches.indoors,
+        autoloot_owned: state.autoloot_owned,
+    };
+    if *switches != next {
+        *switches = next;
+    }
+}
+
+/// SuperWoW's `FoV`: the camera's field of view, 0.1 to 3.14 radians, as `[cam+0x40]`.
+fn apply_fov(switches: Res<SuperWowSwitches>, fov: Option<ResMut<benilla_world::view::CamFov>>) {
+    let Some(mut fov) = fov else {
+        return;
+    };
+    let want = switches
+        .number("FoV")
+        .filter(|v| v.is_finite())
+        .map_or(std::f32::consts::FRAC_PI_2, |v| {
+            v.clamp(0.1, std::f32::consts::PI)
+        });
+    if (fov.0 - want).abs() > f32::EPSILON {
+        fov.0 = want;
+    }
+}
+
+/// SuperWoW's chat bubble CVars into [`crate::chat_bubble::BubbleExtras`].
+fn apply_bubbles(
+    switches: Res<SuperWowSwitches>,
+    extras: Option<ResMut<crate::chat_bubble::BubbleExtras>>,
+) {
+    let Some(mut extras) = extras else {
+        return;
+    };
+    let range = switches
+        .number("ChatBubbleRange")
+        .filter(|v| v.is_finite())
+        .map_or(20.0, |v| v.clamp(10.0, 200.0));
+    let next = crate::chat_bubble::BubbleExtras {
+        raid: switches.on("ChatBubblesRaid"),
+        battleground: switches.on("ChatBubblesBattleground"),
+        whisper: switches.on("ChatBubblesWhisper"),
+        creatures: switches.on("ChatBubblesCreatures"),
+        range_sq: range * range,
+    };
+    if *extras != next {
+        *extras = next;
+    }
+}
+
+/// `IsIndoors`'s bit, the zone resolver's interior under the player; skipped where the world's
+/// point queries do not run.
+fn sync_indoors(
+    world: bevy::ecs::system::If<benilla_world::world_point::WorldPoint>,
+    mut switches: ResMut<SuperWowSwitches>,
+) {
+    let indoors = world.area_interior().is_some();
+    if switches.indoors != indoors {
+        switches.indoors = indoors;
+    }
+}
+
+/// An addon's `SetAutoloot` takes the auto-loot switch over ([`crate::ui_loot::LootConfig`]).
+fn apply_autoloot(
+    switches: Res<SuperWowSwitches>,
+    cfg: Option<ResMut<crate::ui_loot::LootConfig>>,
+) {
+    if let Some(mut cfg) = cfg {
+        if cfg.superwow_owned != switches.autoloot_owned {
+            cfg.superwow_owned = switches.autoloot_owned;
+        }
+    }
+}
+
 /// The `UNIT_CASTEVENT` lane. Added after the spell and combat-log plugins, so the event follows
 /// each packet's own handlers.
 pub(crate) struct SuperWowPlugin;
@@ -334,6 +465,19 @@ pub(crate) struct SuperWowPlugin;
 impl Plugin for SuperWowPlugin {
     fn build(&self, app: &mut App) {
         use SessionEventKind as K;
+        app.init_resource::<SuperWowSwitches>()
+            .init_resource::<crate::chat_bubble::BubbleExtras>()
+            .add_systems(
+                PreUpdate,
+                (
+                    sync_switches,
+                    sync_indoors,
+                    apply_fov,
+                    apply_bubbles,
+                    apply_autoloot,
+                )
+                    .chain(),
+            );
         app.net_handler(K::SpellStart, on_spell_start)
             .net_handler(K::SpellGo, on_spell_go)
             .net_handler(K::SpellFailedOther, on_spell_failed_other)

@@ -947,6 +947,9 @@ pub(crate) struct AutoLootByte(pub(crate) bool);
 pub(crate) struct LootConfig {
     pub(crate) auto_loot: bool,
     pub(crate) show_loot_spam: bool,
+    /// An addon called SuperWoW's `SetAutoloot`, which takes the switch over: Shift no longer
+    /// inverts it, as SuperWoW removes the gesture. Until then 1.12's Shift stands.
+    pub(crate) superwow_owned: bool,
 }
 
 impl Default for LootConfig {
@@ -956,6 +959,7 @@ impl Default for LootConfig {
             auto_loot: false,
             // The reference's registered `"1"`.
             show_loot_spam: true,
+            superwow_owned: false,
         }
     }
 }

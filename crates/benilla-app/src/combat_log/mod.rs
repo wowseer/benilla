@@ -209,10 +209,19 @@ fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
 }
 
-fn on_spell_heal_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
+fn on_spell_heal_log(
+    In(ev): In<SessionEvent>,
+    c: Ctx,
+    mut l: Sinks,
+    superwow: Option<Res<crate::ui_superwow::SuperWowSwitches>>,
+) {
     if let SessionEvent::SpellHealLog(s) = ev {
         let ctx = c.ctx();
         chat::spell_heal_log(s, &ctx, &l.stores, &l.poses, &l.log);
+        // SuperWoW: a heal floats its number too, green, under `HealingText`.
+        if superwow.as_deref().is_none_or(|w| w.on("HealingText")) {
+            text::spell_heal_log(s, &c.index, &c.self_guid, &l.stores, &mut l.text);
+        }
     }
 }
 

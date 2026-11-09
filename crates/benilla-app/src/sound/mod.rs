@@ -65,7 +65,7 @@ pub(crate) use zone::ExplorationSounds;
 
 /// The sound CVars. Defaults are the reference's registrations (`0x456fe0`, `0x460a60`):
 /// `MusicVolume` 0.4 and `AmbienceVolume` 0.6, every other volume 1.0.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub(crate) struct SoundConfig {
     /// `MasterSoundEffects` (default "1", `0x45737a`). The reference pauses the engine
     /// (`0x457500` → `0x7a6570`); benilla zeroes every category in [`Self::category_amp`] and
@@ -206,8 +206,12 @@ fn apply_focus_gate(
     config: Res<SoundConfig>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut last: Local<Option<bool>>,
+    superwow: Option<Res<crate::ui_superwow::SuperWowSwitches>>,
 ) {
-    let open = config.background_sound || windows.single().map_or(true, |w| w.focused);
+    // SuperWoW's `BackgroundSound` keeps the sound on while tabbed out, as the option does.
+    let background =
+        config.background_sound || superwow.as_deref().is_some_and(|s| s.on("BackgroundSound"));
+    let open = background || windows.single().map_or(true, |w| w.focused);
     if *last == Some(open) {
         return;
     }

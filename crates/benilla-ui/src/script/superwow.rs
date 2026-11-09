@@ -70,9 +70,10 @@ pub const EVENTS: &[&str] = &["UNIT_CASTEVENT", "RAW_COMBATLOG", "CREATE_CHATBUB
 
 /// SuperWoW's CVars and their defaults: registered so `GetCVar`/`SetCVar` take them, as an addon's
 /// options read and write them; their effects on the renderer are not built.
-const CVARS: &[(&str, &str)] = &[
+pub const CVARS: &[(&str, &str)] = &[
     ("NameplateRange", "20"),
-    ("NameplateMotion", "0"),
+    // 1, the default spread, is 1.12's own seat; 0 lets the plates overlap.
+    ("NameplateMotion", "1"),
     ("ChatBubbleRange", "40"),
     ("ChatBubblesRaid", "0"),
     ("ChatBubblesBattleground", "0"),
@@ -195,6 +196,8 @@ pub struct SuperWowState {
     pub clickthrough: bool,
     /// `TrackUnit`'s guids.
     pub tracked: BTreeSet<u64>,
+    /// `SetAutoloot` was called: the addon owns auto-loot, and Shift no longer inverts it.
+    pub autoloot_owned: bool,
 }
 
 impl super::UiScript {
@@ -467,6 +470,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let g = lua.globals();
             match on {
                 Some(v) if !matches!(v, Value::Nil) => {
+                    lua.app_data_mut::<SuperWowState>()
+                        .expect("superwow app_data")
+                        .autoloot_owned = true;
                     let value = if switch_arg(&v) { "1" } else { "0" };
                     let set: Function = g.get("SetCVar")?;
                     // A host with no such option leaves the call a no-op.

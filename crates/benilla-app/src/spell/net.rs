@@ -1489,7 +1489,9 @@ fn spell_start(
     // SPELLCAST_START fires only on `cast_time > 0 && !(SpellRec+0x18 & 2)` (`0x6e7a1d`,
     // `0x6e7a27`): a ranged-slot spell never opens a bar. vmangos pads a non-auto-repeat ranged
     // cast by 500 ms (`SpellEntry::GetCastTime`), so Throw arrives as a 500 ms cast with no bar.
-    let ranged_slot = display.ranged_slot();
+    // SuperWoW: a ranged weapon ability that is no auto-repeat shot (Aimed Shot, Multi-Shot) opens
+    // the bar too; Auto Shot, Shoot and Throw still do not.
+    let ranged_slot = display.ranged_slot() && display.auto_repeat();
     if *crate::net::CAST_TRACE && self_guid.0 == Some(caster) {
         info!(
             "cast-trace: RECV SPELL_START — spell {spell_id} cast_time={cast_time_ms}ms \
