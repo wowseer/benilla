@@ -72,6 +72,20 @@ struct DirectAreaEntry {
     view: WorldMapZoneView,
 }
 
+impl WorldMapUiData {
+    /// SuperWoW's `GetMapBoundaries(continent, zone)`: the continent's box for zone 0, else the
+    /// zone's, both indices 1-based as `GetMapContinents` and `GetMapZones` list them.
+    pub(crate) fn bounds(&self, continent: u32, zone: u32) -> Option<ZoneRect> {
+        let c = self
+            .continents
+            .get(usize::try_from(continent.checked_sub(1)?).ok()?)?;
+        match zone.checked_sub(1) {
+            None => Some(c.rect),
+            Some(z) => Some(c.zones.get(usize::try_from(z).ok()?)?.rect),
+        }
+    }
+}
+
 fn zone_rect(a: &WorldMapArea) -> ZoneRect {
     ZoneRect {
         left: a.loc_left,

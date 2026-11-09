@@ -379,20 +379,20 @@ fn every_aura_getter_answers_off_the_live_object() {
     // The fixture reaches every leg: a stacked buff, the vision test, the unit gate, the
     // dispel class, `raidFilter` on both halves, the roster record and the tooltip.
     for line in [
-        "player UnitBuff 2 nil Interface\\Icons\\Spell_1243,3",
+        "player UnitBuff 2 nil Interface\\Icons\\Spell_1243,3,1243",
         "player UnitBuff 3 nil nil",
-        "player UnitBuff 1 1 Interface\\Icons\\Spell_1243,3",
-        "player UnitDebuff 1 nil Interface\\Icons\\Spell_589,1,Magic",
-        "player UnitDebuff 2 nil Interface\\Icons\\Spell_980,2,Curse",
-        "player UnitDebuff 1 1 Interface\\Icons\\Spell_589,1,Magic",
+        "player UnitBuff 1 1 Interface\\Icons\\Spell_1243,3,1243",
+        "player UnitDebuff 1 nil Interface\\Icons\\Spell_589,1,Magic,589",
+        "player UnitDebuff 2 nil Interface\\Icons\\Spell_980,2,Curse,980",
+        "player UnitDebuff 1 1 Interface\\Icons\\Spell_589,1,Magic,589",
         "player UnitDebuff 2 1 nil",
         "player SetUnitBuff 3 nil Amorous",
         "target UnitBuff 1 nil nil",
-        "target UnitDebuff 2 nil Interface\\Icons\\Spell_980,2,Curse",
+        "target UnitDebuff 2 nil Interface\\Icons\\Spell_980,2,Curse,980",
         "target SetUnitBuff 1 nil Mark of the Wild",
-        "party2 UnitBuff 2 nil Interface\\Icons\\Spell_1243,1",
-        "party2 UnitDebuff 2 nil Interface\\Icons\\Spell_980,1,Curse",
-        "partypet1 UnitDebuff 1 nil Interface\\Icons\\Spell_589,1,Magic",
+        "party2 UnitBuff 2 nil Interface\\Icons\\Spell_1243,1,1243",
+        "party2 UnitDebuff 2 nil Interface\\Icons\\Spell_980,1,Curse,980",
+        "partypet1 UnitDebuff 1 nil Interface\\Icons\\Spell_589,1,Magic,589",
     ] {
         assert!(live.iter().any(|l| l == line), "{line:?} among {live:#?}");
     }

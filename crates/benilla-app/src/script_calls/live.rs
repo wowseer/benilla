@@ -193,6 +193,9 @@ live_reads! {
         /// Our cast's state: the in-flight slot, the targeting word, the auto-repeat key and the
         /// attack flag; absent in a harness without the cast state.
         cast: Option<crate::ui_cast::CastLive<'static, 'static>>,
+        /// SuperWoW's reads: the mark board, positions, the caster-form mana, `SpellInfo`, the
+        /// motion state, weapon enchants, map boxes, the import files and the combat log line.
+        superwow: crate::superwow::SuperWowLive<'static, 'static>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

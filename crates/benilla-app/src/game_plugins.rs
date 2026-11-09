@@ -206,6 +206,9 @@ impl PluginGroup for GamePlugins {
             .add(ChrClassesPlugin)
             .add(UiNetPlugin)
             .add(UiCastPlugin)
+            // After the spell, combat-log and cast plugins: `UNIT_CASTEVENT` follows each packet's
+            // own handlers.
+            .add(crate::superwow::SuperWowPlugin)
             .add(UiMirrorPlugin)
             .add(crate::combat_text::CombatTextPlugin)
             .add(crate::nameplates::NameplatesPlugin)

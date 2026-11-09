@@ -248,10 +248,12 @@ fn every_getter_answers_the_same_live_as_off_the_snapshot() {
         "we lead, read off the roster: {live:?}"
     );
     let roster = |line: &str| line.contains(" UnitIsPartyLeader ");
+    // SuperWoW's caster-form mana, `UnitMana("player")`'s second return, is a live read alone.
+    let superwow_mana = |line: &str| line.contains(" UnitMana");
     let differ: Vec<(&String, &String)> = snapshot
         .iter()
         .zip(&live)
-        .filter(|(s, l)| seated(s) && !roster(s) && s != l)
+        .filter(|(s, l)| seated(s) && !roster(s) && !superwow_mana(s) && s != l)
         .collect();
     assert!(differ.is_empty(), "snapshot vs live: {differ:?}");
 }

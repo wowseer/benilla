@@ -644,6 +644,16 @@ impl UnitTokenObjects for TokenObjects<'_, '_, '_> {
         let store = self.store(guid).filter(|s| s.is_unit())?;
         Some(store.0.unit_target().unwrap_or(0))
     }
+    /// SuperWoW's `owner` hop: the charmer, else the summoner, else the creator.
+    fn owner_of(&self, guid: u64) -> Option<u64> {
+        let f = &self.store(guid).filter(|s| s.is_unit())?.0;
+        Some(
+            f.unit_charmed_by()
+                .or_else(|| f.unit_summoned_by())
+                .or_else(|| f.unit_created_by())
+                .unwrap_or(0),
+        )
+    }
 }
 
 /// Squared distance as the reference sums it: `f32` widened to `f64`, `(dz² + dx²) + dy²`

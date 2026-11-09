@@ -70,7 +70,7 @@ impl ChatLogFiles {
     }
 
     /// Append a rendered line to the combat or the chat log, when its flag is on and its file open.
-    pub(super) fn record(&self, combat: bool, line: &str) {
+    pub(crate) fn record(&self, combat: bool, line: &str) {
         let mut files = self.files();
         let log = files.log(combat);
         if !log.on {
