@@ -144,8 +144,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // uncached template, which is never queried here), else the product's item link.
     g.set(
         "GetTradeSkillItemLink",
-        lua.create_function(|lua, index: Value| {
-            let index = number_arg(lua, index, "Usage: GetTradeSkillItemLink(index)")?;
+        lua.create_function(|lua, (index, spell_link): (Value, Option<Value>)| {
+            let index = number_arg(
+                lua,
+                index,
+                "Usage: GetTradeSkillItemLink(index[, spellLink])",
+            )?;
+            // SuperWoW: a true second argument answers the recipe's own spell as an enchant link,
+            // the shape `GetCraftItemLink` answers, product or none.
+            let spell_link = spell_link
+                .as_ref()
+                .is_some_and(|v| !matches!(v, Value::Nil | Value::Boolean(false)));
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let link = usize::try_from(index)
                 .ok()
@@ -155,8 +164,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     Row::Header { .. } => None,
                     Row::Entry(ei) => model.trade_skill.as_ref().map(|t| &t.recipes[ei]),
                 })
-                .filter(|r| r.product_item != 0)
                 .and_then(|r| {
+                    if spell_link {
+                        return Some(format!(
+                            "|cffffffff|Henchant:{}|h[{}]|h|r",
+                            r.spell_id, r.name
+                        ));
+                    }
+                    if r.product_item == 0 {
+                        return None;
+                    }
                     model
                         .item_templates
                         .get(&r.product_item)

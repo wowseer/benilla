@@ -30,6 +30,9 @@ struct Files {
     dir: Option<PathBuf>,
     chat: Log,
     combat: Log,
+    /// SuperWoW's `Logs/WoWRawCombatLog.txt`, the combat lines with GUIDs for names; written
+    /// while the combat log's flag is on, opened at its first line.
+    raw: Option<std::fs::File>,
 }
 
 /// One log: its file, once opened, and its flag, which gates the writes.
@@ -62,6 +65,7 @@ impl ChatLogFiles {
             dir,
             chat: Log::default(),
             combat: Log::default(),
+            raw: None,
         })))
     }
 
@@ -129,6 +133,38 @@ impl ChatLogFiles {
         let mut files = self.files();
         files.chat = Log::default();
         files.combat = Log::default();
+        files.raw = None;
+    }
+
+    /// Append a line to SuperWoW's raw combat log while combat logging is on.
+    pub(crate) fn record_raw(&self, line: &str) {
+        let mut files = self.files();
+        if !files.combat.on {
+            return;
+        }
+        if files.raw.is_none() {
+            let Some(dir) = files.dir.clone() else {
+                return;
+            };
+            let opened = std::fs::create_dir_all(&dir).and_then(|()| {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(dir.join("WoWRawCombatLog.txt"))
+            });
+            match opened {
+                Ok(file) => files.raw = Some(file),
+                Err(e) => {
+                    warn!("chat: cannot open the raw combat log: {e}");
+                    return;
+                }
+            }
+        }
+        if let Some(file) = files.raw.as_mut() {
+            if writeln!(file, "{}  {line}", stamp()).is_err() {
+                files.raw = None;
+            }
+        }
     }
 }
 

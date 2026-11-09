@@ -426,12 +426,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // LootSlot(slot): the LOOT_BIND confirmation only (`0x4c2e70`: `luaL_checknumber(1)`,
     // `dec eax`, `0x4c2790(slot, 1)`, whose arm at `0x4c27c0` returns unless the slot is the
     // pending confirm, `cmp edi, [0x847cec]`). On an ordinary row it does nothing.
+    //
+    // SuperWoW's `LootSlot(slot [, force])`: a true `force` takes the row as its button's click
+    // does (`0x4c2790(slot, 0)`), so an addon loots without the frame; its usage line names it.
     g.set(
         "LootSlot",
-        lua.create_function(|lua, slot: Value| {
+        lua.create_function(|lua, (slot, force): (Value, Option<Value>)| {
             // `is-number` else `Usage: LootSlot(slot)` (`0x84807c`, `0x4c2e81`).
-            let slot = binding_abi::index_arg32(lua, slot, "Usage: LootSlot(slot)")?;
-            super::calls::submit(lua, ScriptCall::Loot(LootCall::Confirm(slot)))
+            let slot = binding_abi::index_arg32(lua, slot, "Usage: LootSlot(slot [, force])")?;
+            let force = force.as_ref().is_some_and(|v| {
+                !matches!(v, Value::Nil | Value::Boolean(false) | Value::Integer(0))
+                    && !matches!(v, Value::Number(n) if *n == 0.0)
+            });
+            let call = if force {
+                LootCall::Take(slot)
+            } else {
+                LootCall::Confirm(slot)
+            };
+            super::calls::submit(lua, ScriptCall::Loot(call))
         })?,
     )?;
 
@@ -993,6 +1005,24 @@ mod tests {
         .unwrap();
         hardware_click(&mut s, "LB1", "RightButton");
         assert_eq!(s.take_loot_calls(), vec![LootCall::Take(2)]);
+    }
+
+    /// SuperWoW's `LootSlot(slot, 1)` takes the row; without the flag it is 1.12's confirm.
+    #[test]
+    fn loot_slot_with_force_takes_the_row() {
+        let mut s = UiScript::new().unwrap();
+        s.keep_calls();
+        s.run("LootSlot(3, 1) LootSlot(4) LootSlot(5, 0) LootSlot(6, false)")
+            .unwrap();
+        assert_eq!(
+            s.take_loot_calls(),
+            vec![
+                LootCall::Take(3),
+                LootCall::Confirm(4),
+                LootCall::Confirm(5),
+                LootCall::Confirm(6)
+            ]
+        );
     }
 
     /// The handler still runs, so stock `LootFrameItem_OnClick` owns ctrl and shift alone.

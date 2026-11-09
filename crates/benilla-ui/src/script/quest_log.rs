@@ -1417,6 +1417,93 @@ fn quest_link(quest_id: u32, record: &QuestRecordView) -> String {
 /// `GetQuestLinkForLogIndex(questIndex)`, its hyperlink; and `GetQuestLinkForID(questID)`, the
 /// hyperlink of a quest the client's cache holds. A header row, an empty slot or an uncached
 /// quest answers nil.
+/// One line of SuperWoW's quest-link tooltip: its text, colour and whether it wraps.
+pub(super) type QuestTipLine = (String, [f32; 3], bool);
+
+/// The reputation standing's label index (`FACTION_STANDING_LABEL1`..`8`) for a raw standing.
+fn standing_label(value: i32) -> u32 {
+    const FLOORS: [i32; 7] = [-6000, -3000, 0, 3000, 9000, 21000, 42000];
+    1 + FLOORS.iter().filter(|&&f| value >= f).count() as u32
+}
+
+/// SuperWoW's tooltip for a `quest:<id>:<level>` link (its strings `[%d] %s`, `You are on this
+/// quest`, `Objectives:`, `- %s slain: %d`, `- %s x %d`, `- %s: %s` and their `%d` forms for a
+/// name not cached), off the quest cache; a quest not cached is asked for, and the tooltip says so.
+/// The colours are benilla's, the stock tooltip's title white and body gold.
+pub(super) fn superwow_quest_tooltip(lua: &Lua, quest_id: u32) -> mlua::Result<Vec<QuestTipLine>> {
+    const WHITE: [f32; 3] = [1.0, 1.0, 1.0];
+    const GOLD: [f32; 3] = [1.0, 0.82, 0.0];
+    let record = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        model.quest_store.records.get(&quest_id).cloned()
+    };
+    let Some(r) = record else {
+        let _ = super::calls::ask(lua, super::RecordAsk::QuestRecord(quest_id));
+        return Ok(vec![(
+            format!("Requesting quest ID {quest_id} from server"),
+            WHITE,
+            false,
+        )]);
+    };
+    let mut lines = vec![(format!("[{}] {}", r.level, r.title), WHITE, false)];
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    if model
+        .quest_log
+        .entries
+        .iter()
+        .any(|row| !row.is_header && row.quest_id == quest_id)
+    {
+        lines.push(("You are on this quest".into(), WHITE, false));
+    }
+    if !r.objectives_text.is_empty() {
+        lines.push((r.objectives_text.clone(), GOLD, true));
+    }
+    let mut wants = Vec::new();
+    for o in &r.objectives {
+        if o.creature_or_go != 0 && o.required_count > 0 {
+            let entry = o.creature_or_go;
+            let name = (!o.text.is_empty()).then(|| o.text.clone()).or_else(|| {
+                (entry & GO_OBJECTIVE_BIT == 0)
+                    .then(|| quest_live::creature_name(lua, &model, entry))
+                    .flatten()
+            });
+            wants.push(match name {
+                Some(n) => format!("- {n} slain: {}", o.required_count),
+                None => format!(
+                    "- {} slain: {}",
+                    entry & !GO_OBJECTIVE_BIT,
+                    o.required_count
+                ),
+            });
+        }
+    }
+    for o in &r.objectives {
+        if o.item_id != 0 && o.item_count > 0 && o.item_id != r.src_item_id {
+            wants.push(match model.item_templates.get(&o.item_id) {
+                Some(t) => format!("- {} x {}", t.name, o.item_count),
+                None => format!("- {} x {}", o.item_id, o.item_count),
+            });
+        }
+    }
+    if r.rep_min.0 != 0 {
+        let label = global(
+            lua,
+            &format!("FACTION_STANDING_LABEL{}", standing_label(r.rep_min.1)),
+        )
+        .unwrap_or_default();
+        let faction = r
+            .rep_faction_name
+            .clone()
+            .unwrap_or_else(|| r.rep_min.0.to_string());
+        wants.push(format!("- {faction}: {label}"));
+    }
+    if !wants.is_empty() {
+        lines.push(("Objectives:".into(), WHITE, false));
+        lines.extend(wants.into_iter().map(|w| (w, GOLD, false)));
+    }
+    Ok(lines)
+}
+
 pub(super) fn install_superwow(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     fn row_quest(lua: &Lua, index: Value, usage: &'static str) -> mlua::Result<Option<u32>> {
@@ -1453,12 +1540,20 @@ pub(super) fn install_superwow(lua: &Lua) -> mlua::Result<()> {
         "GetQuestLinkForID",
         lua.create_function(|lua, id: Value| {
             let id = binding_abi::index_arg32(lua, id, "Usage: GetQuestLinkForID(questID)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model
-                .quest_store
-                .records
-                .get(&id)
-                .map(|r| quest_link(id, r)))
+            let link = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .quest_store
+                    .records
+                    .get(&id)
+                    .map(|r| quest_link(id, r))
+            };
+            // A quest not cached answers nil and is asked for; its answer's callback signals
+            // `QUEST_LOG_UPDATE`.
+            if link.is_none() && id != 0 {
+                let _ = super::calls::ask(lua, super::RecordAsk::QuestRecord(id));
+            }
+            Ok(link)
         })?,
     )?;
     Ok(())

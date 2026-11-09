@@ -108,6 +108,8 @@ fn resolve_through_macro(
         Some(id) => match bound.0.get(&id).map(|b| (b.spell, b.pet_book)) {
             Some((BoundSpell::Spell(s), false)) => SlotResolve::Action(ACTION_KIND_SPELL, s),
             Some((BoundSpell::Spell(s), true)) => SlotResolve::PetSpell(s),
+            // SuperWoW's `/tooltip item:<id>`: the item's slot.
+            Some((BoundSpell::Item(i), _)) => SlotResolve::Action(ACTION_KIND_ITEM, i),
             Some((BoundSpell::None, _)) => SlotResolve::BareMacro,
             Some((BoundSpell::Unresolved, _)) => SlotResolve::Unresolved,
             None => SlotResolve::Missing,
@@ -1149,6 +1151,16 @@ impl crate::script_calls::live::LiveFamily for ActionStates<'_, '_> {
             || ask.answer(|q: &ActionAttackFaceNow| Some(self.attack_face_now(q.0)))
             || ask.answer(|q: &ActionCountNow| Some(self.count_now(q.0)))
             || ask.answer(|q: &ActionConsumableNow| Some(self.consumable_now(q.0)))
+            || ask
+                .answer(|q: &benilla_ui::script::MacroItemCountNow| Some(self.walk.item_count(q.0)))
+            || ask.answer(|q: &benilla_ui::script::MacroItemConsumableNow| {
+                Some(
+                    self.walk
+                        .items
+                        .template(q.0, 0, Ask::Read)
+                        .is_some_and(|t| t.is_consumable()),
+                )
+            })
     }
 }
 

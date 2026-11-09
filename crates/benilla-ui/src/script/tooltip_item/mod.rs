@@ -453,6 +453,22 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 )?;
                 return Ok(());
             }
+            // SuperWoW's `quest:<id>:<level>`: the quest cache's title, state and objectives.
+            if let Some(tail) = link_tail(&link, "quest:") {
+                let id = binding_abi::s_str_to_int(tail);
+                if id <= 0 {
+                    return Err(unknown());
+                }
+                let lines = crate::script::quest_log::superwow_quest_tooltip(lua, id as u32)?;
+                let clear: mlua::Function = this.get("ClearLines")?;
+                clear.call::<()>(this.clone())?;
+                let add: mlua::Function = this.get("AddLine")?;
+                for (text, [r, g, b], wrap) in lines {
+                    add.call::<()>((this.clone(), text, r, g, b, wrap.then_some(1)))?;
+                }
+                super::visibility::set_shown(lua, h, true);
+                return Ok(());
+            }
             let tail = link_tail(&link, "enchant:").ok_or_else(unknown)?;
             // The craft window's `enchant:<spellId>` (`GetCraftItemLink`): a positive id whose
             // record's `castUI` is 3 (`0x532225`..`0x532247`), to the spell builder (`0x532259`).

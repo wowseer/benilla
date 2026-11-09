@@ -553,7 +553,7 @@ fn a_non_number_index_raises_the_bindings_own_usage_line() {
             "LearnTalent(1, {})",
             "Usage: LearnTalent(tabIndex, talentIndex)",
         ),
-        ("LootSlot({})", "Usage: LootSlot(slot)"),
+        ("LootSlot({})", "Usage: LootSlot(slot [, force])"),
         ("LootSlotIsCoin({})", "Usage: LootSlotIsCoin(slot)"),
         ("LootSlotIsItem({})", "Usage: LootSlotIsItem(slot)"),
         ("PickupAction({})", "Usage: PickupAction(slot)"),

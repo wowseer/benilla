@@ -65,7 +65,43 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetWeaponEnchantInfo",
-        lua.create_function(|lua, ()| {
+        lua.create_function(|lua, unit: Option<Value>| {
+            // SuperWoW: `GetWeaponEnchantInfo(unit)` on another friendly player answers the names
+            // of the temporary enchants on its main and off hand, nil for none.
+            // Only a string that is a unit token takes that arm; any other argument is ignored, as
+            // the reference reads none.
+            let token = match &unit {
+                Some(Value::String(s)) => s.to_str().ok().map(|t| t.to_string()),
+                _ => None,
+            };
+            if let Some(token) = token.filter(|t| super::unit::token_recognised(t)) {
+                let me = {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    super::unit::names_self(lua, &model, &token)
+                };
+                if !me {
+                    let guid = {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        super::unit::guid_of(lua, &model, &token)?
+                    };
+                    let friend: mlua::Function = lua.globals().get("UnitIsFriend")?;
+                    let friendly = friend
+                        .call::<Value>(("player", token.as_str()))
+                        .is_ok_and(|v| !matches!(v, Value::Nil | Value::Boolean(false)));
+                    let ids = guid.filter(|_| friendly).and_then(|g| {
+                        super::live::ask(lua, &super::superwow::WeaponEnchantIdQuery(g))
+                    });
+                    let Some((main, off)) = ids else {
+                        return Ok(MultiValue::new());
+                    };
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    let name = |id: u32| match model.enchant_names.get(&id) {
+                        Some(n) if id != 0 => lua.create_string(n).map(Value::String),
+                        _ => Ok(Value::Nil),
+                    };
+                    return Ok(MultiValue::from_vec(vec![name(main)?, name(off)?]));
+                }
+            }
             let hands = super::live::ask(lua, &WeaponEnchantQuery).unwrap_or_else(|| {
                 lua.app_data_ref::<Model>()
                     .expect("model app_data")

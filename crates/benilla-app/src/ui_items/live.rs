@@ -208,6 +208,13 @@ impl ItemRead for LiveItem<'_> {
         })
     }
 
+    fn unstacked_charges(&self) -> Option<u32> {
+        self.template.filter(|t| t.stackable <= 1)?;
+        let (f, _) = self.object?;
+        let n = f.item_spell_charges(0)?;
+        (n != 0).then_some(n.unsigned_abs())
+    }
+
     fn readable(&self) -> bool {
         // The cached record's PageText (`0x5d9e10`), 0 while uncached, else the instance's letter
         // text (`0x4f97c1`).

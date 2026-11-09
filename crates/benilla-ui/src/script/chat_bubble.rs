@@ -125,17 +125,40 @@ impl UiScript {
                 .map(|_| super::font::nameplate_font(lua))
                 .collect()
         };
+        let mut created = Vec::new();
         let visibility = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // No WorldFrame (no interface loaded), no bubbles: no addon walks an invented root.
             let Some(world) = model.arena.lookup("WorldFrame") else {
                 return;
             };
-            sync(&mut model, world, geometry, states, &mut fonts)
+            sync(
+                &mut model,
+                world,
+                geometry,
+                states,
+                &mut fonts,
+                &mut created,
+            )
         };
         // Each a full transition with its handlers, in the order the sync issued them.
         for (frame, shown) in visibility {
             super::visibility::set_shown(lua, frame, shown);
+        }
+        // SuperWoW's `CREATE_CHATBUBBLE`: each new line's bubble frame and its speaker's GUID.
+        for (frame, guid) in created {
+            let id = {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.frame_id(frame)
+            };
+            super::tick::fire_event_into(
+                lua,
+                "CREATE_CHATBUBBLE",
+                vec![
+                    super::ScriptValue::Frame(id),
+                    super::ScriptValue::Str(super::guid_string(guid)),
+                ],
+            );
         }
     }
 
@@ -178,6 +201,7 @@ fn sync(
     geometry: BubbleGeometry,
     states: &[BubbleState],
     fonts: &mut VecDeque<Option<String>>,
+    created: &mut Vec<(FrameHandle, u64)>,
 ) -> Vec<(FrameHandle, bool)> {
     let mut visibility = Vec::new();
 
@@ -205,6 +229,7 @@ fn sync(
                     lay_out(model, i, geometry);
                 }
                 set_line(model, i, state, geometry, &mut visibility);
+                created.push((model.chat_bubbles.bubbles[i].frame, state.key));
                 i
             }
         };

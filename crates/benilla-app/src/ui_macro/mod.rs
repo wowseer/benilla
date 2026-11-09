@@ -462,12 +462,17 @@ pub(crate) fn bind_for_test(script: &mut UiScript, binds: &[(u32, Bound)]) {
                     BoundSpell::None => 0,
                     BoundSpell::Unresolved => -1,
                     BoundSpell::Spell(s) => s as i32,
+                    BoundSpell::Item(_) => 0,
                 };
                 (
                     id,
                     benilla_ui::script::MacroBinding {
                         spell,
                         pet_book: b.pet_book,
+                        item: match b.spell {
+                            BoundSpell::Item(i) => i,
+                            _ => 0,
+                        },
                     },
                 )
             })

@@ -18,6 +18,8 @@ pub(crate) enum BoundSpell {
     Unresolved,
     /// A spell id: the slot shows that spell's state.
     Spell(u32),
+    /// SuperWoW's `/tooltip item:<id>`: the slot shows that item's state.
+    Item(u32),
 }
 
 /// A macro record's cached cast: [`BoundSpell`] and the book selector `[rec+0x568]` beside it, 0
@@ -46,6 +48,7 @@ impl From<MacroBinding> for Bound {
     fn from(b: MacroBinding) -> Self {
         Self {
             spell: match b.spell {
+                _ if b.item != 0 => BoundSpell::Item(b.item),
                 0 => BoundSpell::None,
                 s if s < 0 => BoundSpell::Unresolved,
                 s => BoundSpell::Spell(s as u32),

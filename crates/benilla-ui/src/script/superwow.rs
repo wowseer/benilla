@@ -358,13 +358,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitPosition(unit) → x, y, z in world coordinates; nothing for a unit not held.
+    // UnitPosition(unit) → x, y, z in world coordinates, for a friendly unit; nothing for a
+    // hostile one or a unit not held.
     g.set(
         "UnitPosition",
         lua.create_function(|lua, token: Value| {
-            let Some(guid) = unit_arg(lua, token, r#"Usage: UnitPosition("unit")"#)? else {
+            let text = binding_abi::string_arg(lua, token, r#"Usage: UnitPosition("unit")"#)?;
+            let Some(guid) = unit_guid(lua, &text)? else {
                 return Ok(MultiValue::new());
             };
+            let friend: Function = lua.globals().get("UnitIsFriend")?;
+            let friendly = friend
+                .call::<Value>(("player", text.as_str()))
+                .is_ok_and(|v| truthy(&v));
+            if !friendly {
+                return Ok(MultiValue::new());
+            }
             Ok(match ask(lua, &UnitPositionQuery(guid)) {
                 Some([x, y, z]) => numbers(&[f64::from(x), f64::from(y), f64::from(z)]),
                 None => MultiValue::new(),

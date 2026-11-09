@@ -1049,8 +1049,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 |item| {
                     (
                         item.texture(),
-                        // A slot's stack is always its object's or its push's.
-                        item.stack_count().unwrap_or(1),
+                        // A slot's stack is always its object's or its push's. SuperWoW: an
+                        // item that does not stack and has charges answers them, negative.
+                        match item.unstacked_charges() {
+                            Some(n) => -i64::from(n),
+                            None => i64::from(item.stack_count().unwrap_or(1)),
+                        },
                         super::item_stats::gated_quality(item.quality(), item.inventory_type()),
                         item.readable(),
                     )
@@ -1069,7 +1073,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                             .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
                     )?,
                 ),
-                Value::Integer(i64::from(count)),
+                Value::Integer(count),
                 // The item's lock bit (`0x4f9752`, [`cursor::item_locked`]).
                 flag(locked),
                 // A number on every path: -1 unless the template is cached and equippable

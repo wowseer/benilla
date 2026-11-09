@@ -146,7 +146,12 @@ enum Pending {
     Latched(Box<Pending>),
     /// A line whose event fired where it was written ([`ChatLog::write_combat_now`]): its tee to
     /// the log files alone, in order with the lines around it.
-    Tee { combat: bool, line: String },
+    Tee {
+        combat: bool,
+        line: String,
+        /// SuperWoW's raw line, for `Logs/WoWRawCombatLog.txt`.
+        raw: Option<String>,
+    },
     /// A point where the held lines are retried, from place `from` on ([`Release`]).
     Release { cause: Release, from: u64 },
 }
@@ -544,6 +549,7 @@ impl ChatLog {
             self.q().push(Pending::Tee {
                 combat: kind.is_combat_log(),
                 line,
+                raw: None,
             });
         }
         Some((super::event::event_name(kind), event.script_args()))
@@ -713,12 +719,18 @@ impl ChatLog {
         else {
             return Vec::new();
         };
+        let raw = super::combat::compose_raw_line(script, line);
         self.q().push(Pending::Tee {
             combat: line.kind.is_combat_log(),
             line: text.clone(),
+            raw: raw.clone(),
         });
         let event = ChatEvent::text_only(line.kind, text);
-        let mut out = vec![(super::event::event_name(line.kind), event.script_args())];
+        let name = super::event::event_name(line.kind);
+        let mut out = vec![(name, event.script_args())];
+        if let Some(raw) = raw {
+            out.push(("RAW_COMBATLOG", raw_combat_args(name, raw)));
+        }
         if let Some(word) = &line.word {
             out.push((
                 "COMBAT_TEXT_UPDATE",
@@ -1130,6 +1142,14 @@ pub(super) fn xp_loss_line(total: u32, get: &dyn Fn(&str) -> Option<String>) -> 
 
 /// A combat line whose names are in: composed, routed, then the word its formatter raises after
 /// it. A line that does not compose (no template, no school name) writes neither.
+/// SuperWoW's `RAW_COMBATLOG` arguments: the line's own event name, then its raw text.
+fn raw_combat_args(event: &str, raw: String) -> Vec<benilla_ui::script::ScriptValue> {
+    vec![
+        benilla_ui::script::ScriptValue::Str(event.to_string()),
+        benilla_ui::script::ScriptValue::Str(raw),
+    ]
+}
+
 pub(super) fn write_combat_line(
     script: &mut benilla_ui::script::UiScript,
     windows: &mut ChatWindows,
@@ -1140,6 +1160,11 @@ pub(super) fn write_combat_line(
         return;
     };
     route(script, windows, &ChatEvent::text_only(line.kind, text));
+    if let Some(raw) = super::combat::compose_raw_line(script, line) {
+        windows.logs.record_raw(&raw);
+        let name = super::event::event_name(line.kind);
+        script.fire_event("RAW_COMBATLOG", raw_combat_args(name, raw));
+    }
     if let Some(word) = &line.word {
         crate::ui_unit::fire_combat_text(
             script,
@@ -1746,7 +1771,12 @@ fn fire_one(
                 };
                 script.fire_event(combat_edge, vec![]);
             }
-            Pending::Tee { combat, line } => windows.logs.record(combat, &line),
+            Pending::Tee { combat, line, raw } => {
+                windows.logs.record(combat, &line);
+                if let Some(raw) = raw {
+                    windows.logs.record_raw(&raw);
+                }
+            }
             // Delivered above.
             Pending::Event(_)
             | Pending::Display(_)

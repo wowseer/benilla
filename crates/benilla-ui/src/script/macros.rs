@@ -76,6 +76,9 @@ pub struct MacroBinding {
     pub spell: i32,
     /// The spell came from the pet's book (`0x4b3b51` writes 1), not the player's.
     pub pet_book: bool,
+    /// SuperWoW's `/tooltip item:<id>` first line: the item the slot shows the state of, 0 for
+    /// none; a bound item takes the slot over its spell.
+    pub item: u32,
 }
 
 impl MacroBinding {
@@ -891,7 +894,8 @@ mod tests {
             bound(&s),
             MacroBinding {
                 spell: 16827,
-                pet_book: true
+                pet_book: true,
+                item: 0,
             }
         );
         let mut host = PetBookHost(pet_book_of(2649, "Growl"));
@@ -902,7 +906,8 @@ mod tests {
             bound(&s),
             MacroBinding {
                 spell: 2649,
-                pet_book: true
+                pet_book: true,
+                item: 0,
             }
         );
     }

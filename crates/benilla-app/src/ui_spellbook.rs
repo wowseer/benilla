@@ -463,6 +463,23 @@ pub(crate) fn cast_spell_at(cast: &mut crate::spell::ScriptCast, spell_id: u32, 
     cast_spell_on(cast, spell_id, false, Some(guid));
 }
 
+/// SuperWoW's `CastSpellByName(name, "CLICK")`: the cast, then, when it raised its targeting
+/// circle, the location bind at the cursor's world hit and the send, as a terrain click commits
+/// (`0x492c90` → `BindLocation 0x6e60f0`); over the sky the circle stays up.
+pub(crate) fn cast_spell_at_cursor(cast: &mut crate::spell::ScriptCast, spell_id: u32) {
+    cast_spell_on(cast, spell_id, false, None);
+    if cast.ladder.ground.spell() != Some(spell_id) {
+        return;
+    }
+    let Some(point) = cast.cursor.as_deref().and_then(|c| c.point) else {
+        return;
+    };
+    let at = benilla_assets::coords::bevy_to_wow(point);
+    if let Some((spell_id, commit, bound)) = cast.ladder.ground.location_commit(at) {
+        cast.ladder.commit_targeted(spell_id, commit, bound);
+    }
+}
+
 /// [`cast_spell`]'s body, at `at` when a guid is named, else at the selection or, `on_self`, us.
 fn cast_spell_on(
     cast: &mut crate::spell::ScriptCast,
@@ -470,7 +487,9 @@ fn cast_spell_on(
     on_self: bool,
     at: Option<u64>,
 ) {
-    let crate::spell::ScriptCast { targeting, ladder } = cast;
+    let crate::spell::ScriptCast {
+        targeting, ladder, ..
+    } = cast;
     // `CastSpell`'s three forks ahead of the cast (`0x4b3300`), in order, all ahead of the gate:
     // the active-action toggle (`0x4b36f0`), the stop of the targeting cursor this spell armed
     // (`0x4b3474`-`0x4b347d`), then the form match (`0x4b348b`), which `UseAction` lacks, with its

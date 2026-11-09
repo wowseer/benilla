@@ -105,6 +105,38 @@ fn quoted_call_argument(line: &str) -> Option<String> {
     Some(rest.split('"').next().unwrap_or_default().to_string())
 }
 
+/// What SuperWoW's `/tooltip` first line names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SuperWowTooltip {
+    Spell(u32),
+    Item(u32),
+}
+
+/// A body's first line as SuperWoW's `/tooltip spell:<id>` or `/tooltip item:<id>`.
+pub(crate) fn superwow_tooltip(body: &str) -> Option<SuperWowTooltip> {
+    let line = derived_lines(body).next()?;
+    let head = line.get(..9)?;
+    if !head.eq_ignore_ascii_case("/tooltip ") {
+        return None;
+    }
+    let arg = line[9..].trim();
+    let (kind, rest) = arg.split_once(':')?;
+    let id: u32 = rest
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()
+        .filter(|&id| id != 0)?;
+    if kind.eq_ignore_ascii_case("spell") {
+        Some(SuperWowTooltip::Spell(id))
+    } else if kind.eq_ignore_ascii_case("item") {
+        Some(SuperWowTooltip::Item(id))
+    } else {
+        None
+    }
+}
+
 /// The macro's cast, derived again (`0x4efe00`) from `was`: [`cast_name`] resolved as
 /// `CastSpellByName` resolves a name ([`resolve_spell_in_books`]), so the cooldown swirl and the
 /// press agree on the rank. A match writes the book it came from; a miss leaves the selector.
@@ -115,6 +147,26 @@ pub(crate) fn derive(
     pet: &PetBookState,
     was: MacroBinding,
 ) -> MacroBinding {
+    // SuperWoW: a macro whose first line is `/tooltip spell:<id>` or `/tooltip item:<id>` is
+    // that spell's or item's action, whatever it casts.
+    let was = MacroBinding { item: 0, ..was };
+    match superwow_tooltip(body) {
+        Some(SuperWowTooltip::Spell(id)) => {
+            return MacroBinding {
+                spell: id as i32,
+                pet_book: false,
+                item: 0,
+            }
+        }
+        Some(SuperWowTooltip::Item(id)) => {
+            return MacroBinding {
+                spell: 0,
+                pet_book: false,
+                item: id,
+            }
+        }
+        None => {}
+    }
     let Some((arm, name)) = cast_name(aliases, body) else {
         return MacroBinding { spell: 0, ..was };
     };
@@ -122,6 +174,7 @@ pub(crate) fn derive(
         (Some(s), _) => MacroBinding {
             spell: s.spell_id as i32,
             pet_book: s.pet,
+            item: 0,
         },
         (None, CastArm::Slash) => MacroBinding { spell: -1, ..was },
         (None, CastArm::ByName) => MacroBinding { spell: 0, ..was },
@@ -136,6 +189,29 @@ mod tests {
     /// The aliases these tests need: the shipped `SLASH_CAST1` and `SLASH_CAST2`.
     fn aliases() -> Vec<String> {
         vec!["/cast".into(), "/spell".into()]
+    }
+
+    /// SuperWoW's `/tooltip spell:<id>` and `/tooltip item:<id>`, on the first line alone.
+    #[test]
+    fn a_tooltip_first_line_binds_its_spell_or_item() {
+        assert_eq!(
+            superwow_tooltip("/tooltip item:18641\n/use Dense Dynamite"),
+            Some(SuperWowTooltip::Item(18641))
+        );
+        assert_eq!(
+            superwow_tooltip("/TOOLTIP spell:133"),
+            Some(SuperWowTooltip::Spell(133))
+        );
+        assert_eq!(superwow_tooltip("/cast Fireball\n/tooltip spell:133"), None);
+        assert_eq!(superwow_tooltip("/tooltip quest:5"), None);
+        let b = derive(
+            &aliases(),
+            "/tooltip item:18641\n/cast Fireball",
+            &SpellBookState::default(),
+            &PetBookState::default(),
+            MacroBinding::default(),
+        );
+        assert_eq!((b.spell, b.item), (0, 18641));
     }
 
     #[test]
@@ -382,7 +458,11 @@ mod tests {
             token: None,
             slots: vec![named(6358, "Seduction"), named(19647, "Spell Lock")],
         };
-        let at = |spell, pet_book| MacroBinding { spell, pet_book };
+        let at = |spell, pet_book| MacroBinding {
+            spell,
+            pet_book,
+            item: 0,
+        };
         let derived = |body: &str| derive(&t, body, &player, &pet, MacroBinding::default());
         assert_eq!(derived("/cast Spell Lock"), at(19647, true));
         assert_eq!(
@@ -421,7 +501,11 @@ mod tests {
     /// `[rec+0x568] != 0` (`0x4f0cfb`-`0x4f0d11`), whatever it is bound to now.
     #[test]
     fn only_an_unresolved_or_pet_selected_record_follows_the_pets_list() {
-        let at = |spell, pet_book| MacroBinding { spell, pet_book };
+        let at = |spell, pet_book| MacroBinding {
+            spell,
+            pet_book,
+            item: 0,
+        };
         assert!(at(-1, false).follows_the_pet_book());
         assert!(at(6358, true).follows_the_pet_book());
         assert!(

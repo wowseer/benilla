@@ -85,7 +85,9 @@ pub(crate) enum PetStep {
 /// press's target, the selection as the press found it (`0x4bd212`). Its packet is
 /// `CMSG_PET_CAST_SPELL`, its GCD the pet's ([`crate::spell::CastLadder::send_pet`]).
 pub(crate) fn cast_pet_press(cast: &mut crate::spell::ScriptCast, press: PetCast) {
-    let crate::spell::ScriptCast { targeting, ladder } = cast;
+    let crate::spell::ScriptCast {
+        targeting, ladder, ..
+    } = cast;
     let target = Some(press.target_guid).filter(|&g| g != 0);
     let Some(ctx) = targeting.context_for_caster(press.caster, target) else {
         debug!(

@@ -143,7 +143,8 @@ pub enum PartyRequest {
     LootThreshold(u32),
     /// `SetRaidTarget(unit, index)` after the resolver (`0x4bbeff`): the nonzero guid and the low
     /// byte of the index (`0x4bbf23`), whose slot and mark the app settles.
-    SetRaidTarget { guid: u64, index: u8 },
+    /// `local`: SuperWoW's third argument `"local"`, the mark kept on this client alone.
+    SetRaidTarget { guid: u64, index: u8, local: bool },
     // ── The raid-management verbs ───────────────────────────────────────────────────────────
     /// `ConvertToRaid()`, leader only (`CMSG_GROUP_RAID_CONVERT`).
     ConvertToRaid,
@@ -732,7 +733,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // call it bare.
     g.set(
         "SetRaidTarget",
-        lua.create_function(|lua, (unit, index): (Value, Value)| {
+        lua.create_function(|lua, (unit, index, scope): (Value, Value, Option<Value>)| {
             // `is-number-or-string` on arg 1, `is-number` on arg 2 else `Usage: SetRaidTarget(unit,
             // index)` (`0x847578`, `0x4bc066`); then the token's guid through `GetGUIDFromName`
             // (`0x4bbeff`), which raises for an unknown token, a zero guid returning (`0x4bbf0c`);
@@ -744,8 +745,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 crate::script::unit::guid_of(lua, &model, &unit)?.unwrap_or(0)
             };
+            // SuperWoW: a third argument `"local"` marks on this client alone, solo included.
+            let local = scope
+                .as_ref()
+                .and_then(|v| binding_abi::optional_string(lua, v))
+                .is_some_and(|s| s.eq_ignore_ascii_case("local"));
             if guid != 0 {
-                call(lua, PartyRequest::SetRaidTarget { guid, index })?;
+                call(lua, PartyRequest::SetRaidTarget { guid, index, local })?;
             }
             Ok(())
         })?,
@@ -2026,10 +2032,12 @@ mod tests {
                 PartyRequest::SetRaidTarget {
                     guid: 0x7A7,
                     index: 8,
+                    local: false,
                 },
                 PartyRequest::SetRaidTarget {
                     guid: 0xB0B,
                     index: 0,
+                    local: false,
                 },
             ]
         );

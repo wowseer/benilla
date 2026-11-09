@@ -12,6 +12,9 @@ pub enum ScriptValue {
     Int(i64),
     Number(f64),
     Str(String),
+    /// A frame, by its script id, handed as its Lua table (SuperWoW's `CREATE_CHATBUBBLE` hands
+    /// the bubble's frame).
+    Frame(u32),
 }
 
 impl ScriptValue {
@@ -22,6 +25,7 @@ impl ScriptValue {
             ScriptValue::Int(i) => Value::Integer(i),
             ScriptValue::Number(n) => Value::Number(n),
             ScriptValue::Str(s) => Value::String(lua.create_string(&s)?),
+            ScriptValue::Frame(id) => Value::Table(super::object::frame_wrapper(lua, id)?),
         })
     }
 }

@@ -44,6 +44,10 @@ pub(crate) struct SuperWowLive<'w, 's> {
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     maps: Option<Res<'w, crate::ui_world_map::WorldMapUiData>>,
     logs: Option<Res<'w, crate::ui_chat::logging::ChatLogFiles>>,
+    /// The indoor bit: the WMO group under the player, as the zone resolver reads it.
+    interior: Option<Res<'w, benilla_world::wmo_portal::CurrentAreaInterior>>,
+    /// This frame's world hit along the cursor ray.
+    cursor: Option<Res<'w, crate::target::PickOcclusion>>,
 }
 
 impl SuperWowLive<'_, '_> {
@@ -95,8 +99,8 @@ impl SuperWowLive<'_, '_> {
         })
     }
 
-    /// `IsSwimming`, `IsMounted` and `GetSpeed` off our body and descriptor. Indoors is not read
-    /// here: the indoor bit is the zone resolver's down-ray, which no getter re-runs.
+    /// `IsSwimming`, `IsMounted`, `IsIndoors` and `GetSpeed` off our body, our descriptor and the
+    /// indoor bit (the down-ray's interior group under the player).
     fn motion(&self) -> Option<PlayerMotion> {
         let player = self.player.as_deref()?;
         let (_, speeds) = self.me.single().ok()?;
@@ -107,7 +111,7 @@ impl SuperWowLive<'_, '_> {
         Some(PlayerMotion {
             swimming: player.swimming,
             mounted,
-            indoors: false,
+            indoors: self.interior.as_deref().is_some_and(|i| i.0.is_some()),
             run_speed: speeds.map_or(0.0, |s| s.run),
             swim_speed: speeds.map_or(0.0, |s| s.swim),
         })
@@ -130,10 +134,21 @@ impl SuperWowLive<'_, '_> {
         Some([r.left, r.right, r.top, r.bottom])
     }
 
-    /// `CombatLogAdd`: a line in `WoWCombatLog.txt`, while combat logging is on. SuperWoW's raw
-    /// log is not kept, so a raw line goes to the same file.
+    /// `CursorPosition`: the world hit under the cursor this frame, WoW axes; `None` over the sky.
+    fn cursor_world(&self) -> Option<[f32; 3]> {
+        let point = self.cursor.as_deref()?.point?;
+        Some(benilla_assets::coords::bevy_to_wow(point))
+    }
+
+    /// `CombatLogAdd(text [, raw])`: a line in `WoWCombatLog.txt`, or with `raw` in
+    /// `WoWRawCombatLog.txt`, while combat logging is on.
     fn combat_log_add(&self, q: &CombatLogAddQuery) -> Option<bool> {
-        self.logs.as_deref()?.record(true, &q.text);
+        let logs = self.logs.as_deref()?;
+        if q.raw {
+            logs.record_raw(&q.text);
+        } else {
+            logs.record(true, &q.text);
+        }
         Some(true)
     }
 }
@@ -171,8 +186,7 @@ impl crate::script_calls::live::LiveFamily for SuperWowLive<'_, '_> {
             || ask.answer(|q: &ImportFileQuery| import_file(&q.0))
             || ask.answer(|q: &ExportFileQuery| Some(export_file(&q.name, &q.text)))
             || ask.answer(|q: &CombatLogAddQuery| self.combat_log_add(q))
-            // The cursor's world point needs the world pick's ray, which no getter re-runs.
-            || ask.answer(|_: &CursorWorldQuery| None)
+            || ask.answer(|_: &CursorWorldQuery| self.cursor_world())
     }
 }
 

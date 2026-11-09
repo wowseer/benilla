@@ -63,6 +63,8 @@ pub(crate) use targeting::{
 pub(crate) struct ScriptCast<'w, 's> {
     pub(crate) targeting: cast_target::CastTargeting<'w, 's>,
     pub(crate) ladder: CastLadder<'w, 's>,
+    /// This frame's world hit under the cursor, where SuperWoW's `"CLICK"` cast lands.
+    pub(crate) cursor: Option<Res<'w, crate::target::PickOcclusion>>,
 }
 
 impl ScriptCast<'_, '_> {

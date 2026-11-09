@@ -957,6 +957,7 @@ mod tests {
             crate::script::MacroBinding {
                 spell: 133,
                 pet_book: false,
+                item: 0,
             },
         )]));
         s.set_action(1, Some(action_slot("Interface\\Icons\\Fire", 0x40, 1)));

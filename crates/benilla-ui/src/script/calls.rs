@@ -92,6 +92,13 @@ pub enum ScriptCall {
         /// The gate's tag 2 allowed the cast (`0x6e4bc1`).
         may_cast: bool,
     },
+    /// SuperWoW's `CastSpellByName(name, "CLICK")`: the cast, and a targeting circle it raises
+    /// placed at once on the world point under the cursor.
+    CastSpellAtCursor {
+        spell_id: u32,
+        /// The gate's tag 2 allowed the cast (`0x6e4bc1`).
+        may_cast: bool,
+    },
     /// `CastSpell(id, "pet", onSelf)` and `CastSpellByName(name, onSelf)` on a name only the pet's
     /// book holds (`0x4b3b51`): `0x4b3300`'s `CMSG_PET_ACTION` fork (`0x4b34ce`), with the same
     /// guid swap.
@@ -527,9 +534,9 @@ impl ScriptCall {
             ScriptCall::EnchantConfirm(answer) => answer.may_cast,
             ScriptCall::Item(super::ItemCall::BindOnUse { may_cast }) => *may_cast,
             ScriptCall::Death(super::DeathAction::UseSoulstone { may_cast }) => *may_cast,
-            ScriptCall::CastSpell { may_cast, .. } | ScriptCall::CastSpellAt { may_cast, .. } => {
-                *may_cast
-            }
+            ScriptCall::CastSpell { may_cast, .. }
+            | ScriptCall::CastSpellAt { may_cast, .. }
+            | ScriptCall::CastSpellAtCursor { may_cast, .. } => *may_cast,
             ScriptCall::CastShapeshiftForm { may_cast, .. } => *may_cast,
             ScriptCall::Select { may_cast, .. }
             | ScriptCall::TargetByName { may_cast, .. }

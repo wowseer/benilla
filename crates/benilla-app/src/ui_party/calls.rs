@@ -138,7 +138,7 @@ impl PartyCalls<'_, '_> {
             // and the unit's held (`0x4bbf85`, `0x4bbfa4`), a unit that is no player
             // (`0x4bbfc1`), a player we can cooperate with (`0x606ba0`) or ourselves
             // (`0x4bbfcd`).
-            PartyRequest::SetRaidTarget { guid, index } => {
+            PartyRequest::SetRaidTarget { guid, index, local } => {
                 let relations = &self.relations;
                 let markable = || {
                     let live = |g: u64| held(g).map(|s| &s.0);
@@ -167,7 +167,8 @@ impl PartyCalls<'_, '_> {
                         }
                     }
                     RaidTargetMark::Nothing => {}
-                    RaidTargetMark::Send { icon, guid } if self.group.test => {
+                    // A test group's mark, and SuperWoW's `"local"` one, are applied here alone.
+                    RaidTargetMark::Send { icon, guid } if self.group.test || local => {
                         self.edits
                             .sandbox
                             .push(SandboxEcho::RaidTarget { icon, guid });

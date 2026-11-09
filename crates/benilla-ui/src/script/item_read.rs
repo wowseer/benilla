@@ -69,6 +69,12 @@ pub trait ItemRead {
     fn info(&self) -> Option<ItemInfoFields> {
         None
     }
+    /// An item object's first spell's charges, `ITEM_FIELD_SPELL_CHARGES`, when its record does
+    /// not stack (SuperWoW's `GetContainerItemInfo` count); `None` for one that stacks, has no
+    /// charges, or is a record read.
+    fn unstacked_charges(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// [`ItemRead::info`]: what `GetItemInfo` answers of a record beside its name, quality, slot and

@@ -575,7 +575,8 @@ fn raid_mark_clicks_through_the_nested_level() {
         s.take_party_requests(),
         vec![benilla_ui::script::PartyRequest::SetRaidTarget {
             guid: 0x5E1F,
-            index: 8
+            index: 8,
+            local: false,
         }],
         "Skull queues the mark intent for the menu's unit"
     );

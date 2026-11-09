@@ -195,6 +195,33 @@ impl super::live::LiveQuery for ActionConsumableNow {
     type Answer = bool;
 }
 
+/// SuperWoW's `/tooltip item:<id>` macro slot: the count `GetActionCount` answers for the item.
+pub struct MacroItemCountNow(pub u32);
+
+impl super::live::LiveQuery for MacroItemCountNow {
+    type Answer = u32;
+}
+
+/// SuperWoW's `/tooltip item:<id>` macro slot: whether the item is consumable.
+pub struct MacroItemConsumableNow(pub u32);
+
+impl super::live::LiveQuery for MacroItemConsumableNow {
+    type Answer = bool;
+}
+
+/// The item a macro slot's SuperWoW `/tooltip item:<id>` binds, `None` for any other slot.
+fn macro_item(lua: &Lua, action: u32) -> Option<u32> {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let slot = model.actions.get(&action)?;
+    let id = macro_slot_id(slot.kind, slot.action)?;
+    model.macros.by_id(id)?;
+    model
+        .macro_bindings
+        .get(&id)
+        .map(|b| b.item)
+        .filter(|&i| i != 0)
+}
+
 /// A spell or item slot's icon as the lent host reads it at the call ([`ActionTextureNow`]); a
 /// macro slot's the attack faces of its bound spell ([`ActionAttackFaceNow`]), else its record's;
 /// else the VM's copy of the slot; `None` for an empty slot. The pickup's cursor reads it too.
@@ -624,19 +651,32 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetActionText",
         lua.create_function(|lua, slot: Value| {
             let slot = super::binding_abi::number_arg(lua, slot, "Usage: GetActionText(slot)")?;
-            let name = {
+            // SuperWoW: then the slot's type, `"MACRO"`, `"ITEM"` or `"SPELL"`, and its id, a
+            // macro's its `GetMacroInfo` index; an empty slot answers nil alone.
+            let (name, kind) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                u32::try_from(slot)
-                    .ok()
-                    .and_then(|s| model.actions.get(&s))
+                let held = u32::try_from(slot).ok().and_then(|s| model.actions.get(&s));
+                let name = held
                     .and_then(|s| macro_slot_id(s.kind, s.action))
                     .and_then(|id| model.macros.by_id(id))
-                    .map(|m| m.name.clone())
+                    .map(|m| m.name.clone());
+                let kind = held.and_then(|s| match macro_slot_id(s.kind, s.action) {
+                    Some(id) => model.macros.index_of_id(id).map(|i| ("MACRO", i as i64)),
+                    None if s.kind == ACTION_KIND_ITEM => Some(("ITEM", i64::from(s.action))),
+                    None if s.kind == ACTION_KIND_SPELL => Some(("SPELL", i64::from(s.action))),
+                    None => None,
+                });
+                (name, kind)
             };
-            match name {
-                Some(n) => Ok(Value::String(lua.create_string(&n)?)),
-                None => Ok(Value::Nil),
+            let mut out = vec![match name {
+                Some(n) => Value::String(lua.create_string(&n)?),
+                None => Value::Nil,
+            }];
+            if let Some((word, id)) = kind {
+                out.push(Value::String(lua.create_string(word)?));
+                out.push(Value::Integer(id));
             }
+            Ok(MultiValue::from_vec(out))
         })?,
     )?;
 
@@ -684,6 +724,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: GetActionCount(slot)` (`0x84bf98`, `0x4e6ebb`).
             let action = binding_abi::index_arg32(lua, action, "Usage: GetActionCount(slot)")?;
+            if let Some(item) = macro_item(lua, action) {
+                return Ok(super::live::ask(lua, &MacroItemCountNow(item)).unwrap_or(0));
+            }
             // The bar's count cache at the call (`0x4e6c70`), through the lent host.
             let mirror = lua
                 .app_data_ref::<Model>()
@@ -825,6 +868,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: IsConsumableAction(slot)` (`0x84c10c`, `0x4e74bf`).
             let action = binding_abi::index_arg32(lua, action, "Usage: IsConsumableAction(slot)")?;
+            if let Some(item) = macro_item(lua, action) {
+                return Ok(flag(
+                    super::live::ask(lua, &MacroItemConsumableNow(item)).unwrap_or(false),
+                ));
+            }
             let mirror = lua
                 .app_data_ref::<Model>()
                 .expect("model app_data")
@@ -973,6 +1021,7 @@ mod tests {
                 MacroBinding {
                     spell: 3009,
                     pet_book: true,
+                    item: 0,
                 },
             ),
             (
@@ -980,6 +1029,7 @@ mod tests {
                 MacroBinding {
                     spell: 133,
                     pet_book: false,
+                    item: 0,
                 },
             ),
         ]));
@@ -1249,8 +1299,13 @@ mod tests {
                 "{why} must be nil"
             );
         }
-        // One value on every non-raising path.
-        assert_eq!(s.arity("GetActionText(4)").unwrap(), 1);
+        // SuperWoW: a held slot answers its type and id after the name.
+        assert_eq!(s.arity("GetActionText(4)").unwrap(), 3);
+        assert_eq!(
+            s.arity("GetActionText(6)").unwrap(),
+            1,
+            "an empty slot, nil alone"
+        );
     }
 
     /// The raise is `0x4e70be` into `0x6f4940`, which never returns.

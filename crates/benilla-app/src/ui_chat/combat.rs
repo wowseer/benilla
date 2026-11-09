@@ -791,6 +791,22 @@ pub(crate) struct Fills {
 /// (`0x402141`, `0x64ede9`). It binds a numbered hole (`%2$d`, the deDE templates': `Ihr trefft
 /// %1$s. Schaden: %2$d.`) to its argument in the list enUS fills in sequence, and prints a
 /// template that leaves an argument out.
+/// SuperWoW's raw line for `RAW_COMBATLOG`: the same template with each unit name its GUID
+/// string (`0x` and 16 hex digits), so an addon reads who without a name lookup.
+pub(crate) fn compose_raw_line(
+    lua: &benilla_ui::script::UiScript,
+    line: &PendingCombat,
+) -> Option<String> {
+    let mut fills = line.fills.clone();
+    if line.subject != 0 {
+        fills.attacker = benilla_ui::script::guid_string(line.subject);
+    }
+    if line.object != 0 {
+        fills.victim = benilla_ui::script::guid_string(line.object);
+    }
+    compose_line(lua, line.family, line.variant, &fills)
+}
+
 pub(crate) fn compose_line(
     lua: &benilla_ui::script::UiScript,
     family: Family,

@@ -773,7 +773,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // SuperWoW: a second argument that is a unit token is the cast's target, in the
             // selection's place; any other value is 1.12's `onSelf` flag, so `"1"` and `"yes"`
             // still read as they did.
+            // SuperWoW: `"CLICK"` places a targeting circle at the cursor's world point.
+            let click = matches!(&on_self, Some(Value::String(s))
+                if s.to_str().is_ok_and(|t| t.eq_ignore_ascii_case("CLICK")));
             let unit = match &on_self {
+                _ if click => None,
                 Some(Value::String(s)) => {
                     let token = s.to_str()?.to_string();
                     if super::unit::token_recognised(&token) {
@@ -792,6 +796,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let on_self = match unit {
                 Some(Some(guid)) => guid != 0 && guid == me,
                 Some(None) => false,
+                None if click => false,
                 None => bool_or_default(on_self.as_ref(), false),
             };
             let at = unit.flatten().filter(|_| !on_self);
@@ -820,6 +825,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 },
                 // `TryCastSpell`'s gate, tag 2 (`0x6e4bc1`), behind the cancels as for
                 // `CastSpell`.
+                Some(found) if !found.passive && click => ScriptCall::CastSpellAtCursor {
+                    spell_id: found.spell_id,
+                    may_cast: protected::gate(lua, Tag::CAST),
+                },
                 Some(found) if !found.passive => match at {
                     Some(guid) => ScriptCall::CastSpellAt {
                         spell_id: found.spell_id,

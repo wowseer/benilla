@@ -179,7 +179,9 @@ impl PetLeg<'_> {
             crate::ui_items::slot_guid(&self.me_store.0, held.bag, slot0, &cast.ladder.objects)?;
         // `0x6ea266`: Feed Pet through the attempt as the active player, no item, the selection
         // as its candidate (`0x6e5a90(spell, 0, 0)`), whose every rung may refuse it.
-        let crate::spell::ScriptCast { targeting, ladder } = cast;
+        let crate::spell::ScriptCast {
+            targeting, ladder, ..
+        } = cast;
         ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
         Some(FoodBind {
             spell_id,
